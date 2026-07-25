@@ -49,6 +49,7 @@ const state = {
 
   // 开关
   llmEnabled: false,
+  llmConfig: null,
   memoryEnabled: true,
 
   // 粒子系统
@@ -423,6 +424,7 @@ async function init() {
   loadUserPreferences();
   $("#currentUsername").textContent = state.user.username;
   $("#logoutButton").addEventListener("click", logout);
+  initLlmSettings();
   await initAuthenticatedApp();
 }
 
@@ -566,7 +568,10 @@ function updateLlmStatus() {
   if (!line || !state.meta?.llm) return;
   const persona = currentPersona();
   const personaText = persona ? ` · ${persona.name}` : "";
-  if (state.llmEnabled && state.meta.llm.enabled) {
+  if (state.llmEnabled && state.meta.llm.enabled && state.meta.llm.last_error) {
+    line.textContent = `大模型最近调用失败 · 点击顶部 API 设置${personaText}`;
+    $("#aiModelStatus").textContent = "⚠ API 调用失败";
+  } else if (state.llmEnabled && state.meta.llm.enabled) {
     const modelName = state.meta.llm.display_name || `${state.meta.llm.provider} / ${state.meta.llm.model}`;
     line.textContent = `大模型已接入：${modelName}${personaText}`;
     $("#aiModelStatus").textContent = modelName;
@@ -1207,6 +1212,116 @@ async function handleConflictFileUpload(e) {
     if (target) target.innerHTML = `<div style="padding:12px;text-align:center;color:#ef4444;font-size:12px">分析课表失败：${escapeHtml(err.message)}</div>`;
   } finally {
     if (e.target) e.target.value = "";
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// 每用户独立的大模型 API 配置
+// ═════════════════════════════════════════════════════════════════════
+
+function initLlmSettings() {
+  $("#llmSettingsButton").addEventListener("click", openLlmSettings);
+  $("#llmSettingsClose").addEventListener("click", closeLlmSettings);
+  $("#llmSettingsCancel").addEventListener("click", closeLlmSettings);
+  $("#llmProvider").addEventListener("change", () => syncLlmProviderFields(true));
+  $("#llmSettingsForm").addEventListener("submit", saveLlmSettings);
+  $("#llmSettingsOverlay").addEventListener("click", (event) => {
+    if (event.target.id === "llmSettingsOverlay") closeLlmSettings();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("#llmSettingsOverlay").hidden) closeLlmSettings();
+  });
+}
+
+function llmPreset(providerId) {
+  return (state.llmConfig?.presets || []).find((item) => item.id === providerId);
+}
+
+async function openLlmSettings() {
+  const overlay = $("#llmSettingsOverlay");
+  const message = $("#llmSettingsMessage");
+  overlay.hidden = false;
+  message.textContent = "正在读取当前账号的配置…";
+  message.className = "llm-settings-message";
+  try {
+    state.llmConfig = await api("/api/llm/config");
+    $("#llmProvider").innerHTML = state.llmConfig.presets
+      .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.label)}</option>`)
+      .join("");
+    $("#llmProvider").value = state.llmConfig.provider || "server";
+    $("#llmBaseUrl").value = state.llmConfig.base_url || "";
+    $("#llmModel").value = state.llmConfig.model || "";
+    $("#llmApiKey").value = "";
+    syncLlmProviderFields(false);
+    message.textContent = state.llmConfig.status?.last_error
+      ? "最近一次调用失败，可更换当前账号的 API 配置。"
+      : "";
+  } catch (error) {
+    message.textContent = error.message;
+    message.className = "llm-settings-message error";
+  }
+}
+
+function closeLlmSettings() {
+  $("#llmSettingsOverlay").hidden = true;
+  $("#llmApiKey").value = "";
+}
+
+function syncLlmProviderFields(resetDefaults) {
+  const provider = $("#llmProvider").value;
+  const preset = llmPreset(provider);
+  const isServer = provider === "server";
+  const isCustom = provider === "custom";
+  $("#llmPersonalFields").hidden = isServer;
+  $("#llmBaseUrl").readOnly = !isCustom;
+  $("#llmBaseUrl").required = !isServer;
+  $("#llmModel").required = !isServer;
+  if (resetDefaults && preset) {
+    $("#llmBaseUrl").value = preset.base_url || "";
+    $("#llmModel").value = preset.model || "";
+    $("#llmApiKey").value = "";
+  }
+  $("#llmKeyState").textContent = isServer
+    ? ""
+    : state.llmConfig?.has_api_key
+      ? "当前账号已有加密密钥；不填写新密钥会继续使用原密钥。"
+      : "当前账号尚未保存 API Key。";
+  $("#llmSettingsMessage").textContent = "";
+  $("#llmSettingsMessage").className = "llm-settings-message";
+}
+
+async function saveLlmSettings(event) {
+  event.preventDefault();
+  const saveButton = $("#llmSettingsSave");
+  const message = $("#llmSettingsMessage");
+  saveButton.disabled = true;
+  message.textContent = "正在保存…";
+  message.className = "llm-settings-message";
+  try {
+    const result = await api("/api/llm/config", {
+      method: "PUT",
+      body: JSON.stringify({
+        provider: $("#llmProvider").value,
+        base_url: $("#llmBaseUrl").value.trim(),
+        model: $("#llmModel").value.trim(),
+        api_key: $("#llmApiKey").value.trim(),
+      }),
+    });
+    state.llmConfig = result;
+    state.meta.llm = result.status;
+    state.llmEnabled = result.status.enabled;
+    syncToggles();
+    updateLlmStatus();
+    message.textContent = result.source === "personal"
+      ? "已保存当前账号的独立 API 配置。"
+      : "已恢复平台默认配置。";
+    message.className = "llm-settings-message success";
+    setTimeout(closeLlmSettings, 700);
+  } catch (error) {
+    message.textContent = error.message;
+    message.className = "llm-settings-message error";
+  } finally {
+    saveButton.disabled = false;
   }
 }
 

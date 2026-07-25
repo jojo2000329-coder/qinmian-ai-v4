@@ -70,6 +70,157 @@
   display: none;
 }
 
+.llm-settings-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12500;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(14px);
+}
+
+.llm-settings-overlay[hidden],
+.llm-personal-fields[hidden] {
+  display: none;
+}
+
+.llm-settings-card {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid rgba(14, 165, 233, 0.24);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.24);
+}
+
+.llm-settings-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 24px 26px 18px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.llm-settings-header h2 {
+  color: #0f172a;
+  font-size: 21px;
+}
+
+.llm-settings-header p {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.llm-settings-header button {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 10px;
+  color: #64748b;
+  background: #f1f5f9;
+  cursor: pointer;
+  font-size: 23px;
+}
+
+.llm-settings-form {
+  display: grid;
+  gap: 16px;
+  padding: 22px 26px 26px;
+}
+
+.llm-settings-form label,
+.llm-personal-fields {
+  display: grid;
+  gap: 7px;
+}
+
+.llm-personal-fields {
+  gap: 15px;
+}
+
+.llm-settings-form label > span {
+  color: #334155;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.llm-settings-form input,
+.llm-settings-form select {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  outline: none;
+  color: #0f172a;
+  background: #fff;
+}
+
+.llm-settings-form input:focus,
+.llm-settings-form select:focus {
+  border-color: #0ea5e9;
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.12);
+}
+
+.llm-settings-form input[readonly] {
+  color: #475569;
+  background: #f8fafc;
+}
+
+.llm-key-state,
+.llm-settings-note,
+.llm-settings-message {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.llm-settings-note {
+  padding: 11px 12px;
+  border-radius: 10px;
+  background: #f0f9ff;
+}
+
+.llm-settings-message {
+  min-height: 19px;
+}
+
+.llm-settings-message.error {
+  color: #dc2626;
+}
+
+.llm-settings-message.success {
+  color: #059669;
+}
+
+.llm-settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.llm-settings-actions button {
+  padding: 10px 16px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  color: #334155;
+  background: #fff;
+  cursor: pointer;
+}
+
+.llm-settings-actions .primary {
+  border-color: transparent;
+  color: #fff;
+  background: linear-gradient(135deg, #0ea5e9, #3b82f6);
+}
+
+.llm-settings-actions button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .auth-card {
   width: min(430px, 100%);
   padding: 34px;

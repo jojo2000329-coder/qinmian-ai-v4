@@ -55,13 +55,17 @@ QINMIAN_SECRET_KEY=一个足够长的随机字符串
 
 | 名称 | 必填 | 默认值 |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | 是 | 无 |
+| `OPENAI_API_KEY` | 否；仅平台提供默认 OpenAI 模型时需要 | 无 |
 | `QINMIAN_LLM_BASE_URL` | 否 | `https://api.openai.com/v1` |
 | `QINMIAN_LLM_MODEL` | 否 | `gpt-5.6-terra` |
 | `QINMIAN_VISION_MODEL` | 否 | `gpt-5.6-terra` |
 | `QINMIAN_SECRET_KEY` | 生产环境必填 | 本地自动生成并写入 `data/.session_secret` |
 | `QINMIAN_COOKIE_SECURE` | HTTPS 部署建议设为 `1` | `0` |
 | `PORT` | 否 | `8080` |
+
+登录用户也可以在页面右上角点击 **API**，为自己的账号保存独立的大模型配置。
+个人 API Key 会加密后写入 PostgreSQL，不会通过查询接口返回。平台默认 Key 与
+个人 Key 相互独立；个人配置优先于平台默认配置。
 
 ## 6. 数据持久化说明
 

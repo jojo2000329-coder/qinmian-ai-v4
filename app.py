@@ -21,8 +21,6 @@ import os
 import re
 import threading
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +56,7 @@ from qinmian.knowledge_base import KnowledgeBase
 from qinmian.personas import public_personas
 from qinmian.planner import CareerPlanner
 from qinmian.tools import FunctionCallExecutor, get_function_schemas
+from qinmian.user_llm import UserLLMConfigStore
 from qinmian.user_runtime import UserRuntimeStoreManager
 
 # ── Flask 应用 ───────────────────────────────────────────────────────
@@ -97,6 +96,7 @@ CONFLICT_RESOLVER = ConflictResolver(STORE)
 CAREER_PLANNER = CareerPlanner(STORE)
 FC_EXECUTOR = FunctionCallExecutor(STORE)
 USER_RUNTIME_STORES = UserRuntimeStoreManager(STORE)
+USER_LLM_CONFIGS = UserLLMConfigStore(str(app.config["SECRET_KEY"]))
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -145,13 +145,37 @@ def _knowledge_base_for(user_id: str | None = None) -> KnowledgeBase:
         return knowledge_base
 
 
+def _llm_client_for_user(user_id: str | None = None):
+    owner_id = user_id or _current_user_id()
+    try:
+        return USER_LLM_CONFIGS.get_client(owner_id, AGENT.llm)
+    except ValueError as exc:
+        from qinmian.llm import LLMClient
+
+        client = LLMClient({
+            "provider": "personal",
+            "base_url": "https://api.openai.com/v1",
+            "model": "unconfigured",
+            "vision_model": "unconfigured",
+            "display_name": "个人 API 配置不可用",
+            "api_key": "",
+        })
+        client.last_error = str(exc)
+        return client
+
+
 def _llm_status_for_user() -> dict[str, Any]:
-    status = dict(AGENT.llm_status())
+    user_id = _current_user_id()
+    client = _llm_client_for_user(user_id)
+    settings = USER_LLM_CONFIGS.public_settings(user_id)
+    status = dict(client.status())
     configured = bool(status.get("enabled"))
     user_enabled = bool(session.get("llm_enabled", True))
     status["configured"] = configured
     status["user_enabled"] = user_enabled
     status["enabled"] = configured and user_enabled
+    status["source"] = settings["source"]
+    status["has_personal_config"] = settings["source"] == "personal"
     return status
 
 
@@ -444,6 +468,32 @@ def api_llm_status():
     return jsonify(_llm_status_for_user())
 
 
+@app.route("/api/llm/config", methods=["GET", "PUT", "DELETE"])
+def api_llm_config():
+    """Read or update the current user's encrypted BYOK configuration."""
+    user_id = _current_user_id()
+    if request.method == "GET":
+        config = USER_LLM_CONFIGS.public_settings(user_id)
+        config["status"] = _llm_status_for_user()
+        return jsonify(config)
+    if request.method == "DELETE":
+        USER_LLM_CONFIGS.clear_settings(user_id)
+        return jsonify({
+            **USER_LLM_CONFIGS.public_settings(user_id),
+            "status": _llm_status_for_user(),
+        })
+
+    try:
+        config = USER_LLM_CONFIGS.save_settings(user_id, _body_json())
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    session["llm_enabled"] = True
+    return jsonify({
+        **config,
+        "status": _llm_status_for_user(),
+    })
+
+
 @app.route("/api/llm/toggle", methods=["POST"])
 def api_llm_toggle():
     """切换当前登录用户的大模型启用状态"""
@@ -672,6 +722,7 @@ def api_chat():
     enhanced_context["knowledge_base_enabled"] = kb_enabled
     enhanced_context["llm_enabled"] = bool(session.get("llm_enabled", True))
     enhanced_context["_runtime_store"] = USER_RUNTIME_STORES.get(user_id)
+    enhanced_context["_llm_client"] = _llm_client_for_user(user_id)
 
     # 调用 Agent
     result = AGENT.respond(message, enhanced_context)
@@ -737,6 +788,7 @@ def api_chat_stream():
     enhanced_context["knowledge_base_enabled"] = kb_enabled
     enhanced_context["llm_enabled"] = bool(session.get("llm_enabled", True))
     enhanced_context["_runtime_store"] = USER_RUNTIME_STORES.get(user_id)
+    enhanced_context["_llm_client"] = _llm_client_for_user(user_id)
 
     def generate():
         yield _sse("meta", {"status": "started", "message": message, "conversation_id": conv_id})
@@ -829,16 +881,18 @@ def _stream_with_agent(
     knowledge_base: KnowledgeBase,
 ):
     """LLM 模式流式响应"""
+    llm_client = context.get("_llm_client") or AGENT.llm
     try:
         from langchain.agents import AgentExecutor, create_openai_functions_agent
         from langchain.schema import SystemMessage, HumanMessage, AIMessage
         from langchain_openai import ChatOpenAI
         from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
+        llm_client.validate_endpoint()
         llm = ChatOpenAI(
             model=llm_status.get("model", "gpt-4o-mini"),
-            openai_api_key=AGENT.llm.api_key,
-            openai_api_base=AGENT.llm.base_url,
+            openai_api_key=llm_client.api_key,
+            openai_api_base=llm_client.base_url,
             streaming=True,
         )
 
@@ -918,11 +972,13 @@ def _stream_with_agent(
         add_message(conv_id, "assistant", full_answer, user_id=user_id)
 
     except ImportError as e:
+        llm_client.last_error = str(e)
         yield _sse("error", {
             "error": f"LangChain 未安装或导入失败: {str(e)}",
             "hint": "请安装: pip install langchain langchain-openai",
         })
     except Exception as e:
+        llm_client.last_error = str(e)
         yield _sse("error", {"error": f"Agent 执行异常: {str(e)}"})
 
 
@@ -1130,7 +1186,7 @@ def _normalize_analysis_result(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _call_file_analysis(content: Any, prompt: str = "") -> dict[str, Any]:
-    llm = AGENT.llm
+    llm = _llm_client_for_user()
     if not llm.api_key:
         raise RuntimeError("未配置大模型 API Key")
     payload = {
@@ -1138,19 +1194,13 @@ def _call_file_analysis(content: Any, prompt: str = "") -> dict[str, Any]:
         "messages": [{"role": "user", "content": content}],
         "max_tokens": 3000,
     }
-    req = urllib.request.Request(
-        f"{llm.base_url}/chat/completions",
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={"Authorization": f"Bearer {llm.api_key}", "Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=max(llm.timeout, 60)) as response:
-            raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"模型接口返回 HTTP {exc.code}: {detail[:300]}") from exc
-    response_data = json.loads(raw)
+        response_data = llm.request_chat_completion(
+            payload,
+            timeout=max(llm.timeout, 60),
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"模型接口调用失败：{str(exc)[:300]}") from exc
     answer = response_data["choices"][0]["message"]["content"]
     return _normalize_analysis_result(_parse_llm_json(answer))
 

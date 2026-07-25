@@ -7,13 +7,21 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from .api_config import normalize_api_base_url
 from .personas import persona_for, public_persona
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Do not let a validated public API URL redirect the server elsewhere."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 class LLMClient:
     """Small OpenAI-compatible chat client using only the Python standard library."""
 
-    def __init__(self) -> None:
+    def __init__(self, overrides: dict[str, Any] | None = None) -> None:
         config = self._load_config()
         self.provider = os.getenv("QINMIAN_LLM_PROVIDER", str(config.get("provider", "openai_compatible"))).strip()
         self.api_key = (
@@ -36,6 +44,17 @@ class LLMClient:
         self.timeout = int(os.getenv("QINMIAN_LLM_TIMEOUT", str(config.get("timeout", 20))))
         self.last_error = ""
         self._apply_provider_defaults()
+        if overrides:
+            self.provider = str(overrides.get("provider", self.provider)).strip()
+            self.api_key = str(overrides.get("api_key", self.api_key)).strip()
+            self.model = str(overrides.get("model", self.model)).strip()
+            self.vision_model = str(
+                overrides.get("vision_model", overrides.get("model", self.vision_model))
+            ).strip()
+            self.display_name = str(overrides.get("display_name", self.display_name)).strip()
+            self.base_url = str(overrides.get("base_url", self.base_url)).strip().rstrip("/")
+            self.timeout = int(overrides.get("timeout", self.timeout))
+            self._apply_provider_defaults()
         if os.getenv("QINMIAN_LLM_DISABLED", "0").lower() in {"1", "true", "yes", "on"}:
             self.api_key = ""
 
@@ -76,6 +95,11 @@ class LLMClient:
             "display_name": self.display_name or f"{self.provider} / {self.model}",
             "last_error": self.last_error,
         }
+
+    def validate_endpoint(self) -> str:
+        """Validate the outbound endpoint immediately before a server-side request."""
+        self.base_url = normalize_api_base_url(self.base_url, resolve_dns=True)
+        return self.base_url
 
     def enhance_answer(
         self,
@@ -157,6 +181,17 @@ class LLMClient:
             "model": self.model,
             "messages": messages,
         }
+        result = self.request_chat_completion(payload)
+        return result["choices"][0]["message"]["content"].strip()
+
+    def request_chat_completion(
+        self,
+        payload: dict[str, Any],
+        *,
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
+        """Send one safe OpenAI-compatible chat completion request."""
+        self.validate_endpoint()
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(
             f"{self.base_url}/chat/completions",
@@ -168,13 +203,13 @@ class LLMClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            opener = urllib.request.build_opener(_NoRedirectHandler())
+            with opener.open(request, timeout=timeout or self.timeout) as response:
                 raw = response.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"LLM HTTP {exc.code}: {detail[:500]}") from exc
-        result = json.loads(raw)
-        return result["choices"][0]["message"]["content"].strip()
+        return json.loads(raw)
 
     def _compact(self, payload: dict[str, Any]) -> dict[str, Any]:
         data = payload.get("data")

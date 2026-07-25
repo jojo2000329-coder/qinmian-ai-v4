@@ -377,18 +377,19 @@ class QinmianAgent:
         response = dict(response)
         response["persona"] = public_persona(persona_id)
         request_context = self._request_context.get({})
+        llm_client = request_context.get("_llm_client") or self.llm
         if request_context.get("llm_enabled") is False:
-            response["llm"] = self.llm.status()
+            response["llm"] = llm_client.status()
             response["llm"]["used"] = False
             response["llm"]["reason"] = "disabled_for_user"
             return response
         if self._should_keep_exact_answer(response):
-            response["llm"] = self.llm.status()
+            response["llm"] = llm_client.status()
             response["llm"]["used"] = False
             response["llm"]["reason"] = "exact_local_data"
             return response
         major = self.store.get_major(major_id) if major_id and include_major_context else None
-        return self.llm.enhance_answer(
+        return llm_client.enhance_answer(
             message,
             response,
             major,

@@ -64,6 +64,21 @@ python app.py
 
 浏览器打开 `http://127.0.0.1:8765`
 
+### 每个账号独立配置大模型 API（BYOK）
+
+登录后点击右上角的 **API** 按钮，可以为当前账号单独选择：
+
+- OpenAI
+- DeepSeek
+- 通义千问（DashScope）
+- OpenRouter
+- 其他提供 OpenAI 兼容 `/chat/completions` 接口的服务
+
+每个用户可填写自己的 API Base URL、模型名称和 API Key。个人密钥使用
+`QINMIAN_SECRET_KEY` 派生的加密密钥后再保存，接口和页面只返回“是否已配置”，
+不会回显密钥原文。自定义地址必须使用公开 HTTPS 地址，不能指向本机或内网。
+未配置个人 API 时使用平台默认配置；平台也没有可用密钥时自动使用本地工具模式。
+
 首次打开会进入注册/登录页。每个新注册账号都从空白的个人数据空间开始，
 不会自动继承 `data/conversations/` 或 `data/knowledge_base/` 中的旧版数据。
 

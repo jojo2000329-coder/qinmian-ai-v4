@@ -43,6 +43,51 @@
       </div>
     </div>
 
+    <!-- ═══ 每个用户独立的大模型 API 配置 ═══ -->
+    <div class="llm-settings-overlay" id="llmSettingsOverlay" hidden>
+      <section class="llm-settings-card" role="dialog" aria-modal="true" aria-labelledby="llmSettingsTitle">
+        <header class="llm-settings-header">
+          <div>
+            <h2 id="llmSettingsTitle">大模型 API 设置</h2>
+            <p>当前账号独立使用；密钥加密保存在服务器，页面不会回显。</p>
+          </div>
+          <button id="llmSettingsClose" type="button" aria-label="关闭">×</button>
+        </header>
+        <form id="llmSettingsForm" class="llm-settings-form">
+          <label>
+            <span>提供商</span>
+            <select id="llmProvider"></select>
+          </label>
+          <div id="llmPersonalFields" class="llm-personal-fields">
+            <label>
+              <span>API Base URL</span>
+              <input id="llmBaseUrl" type="url" maxlength="512" autocomplete="off"
+                placeholder="https://api.example.com/v1" />
+            </label>
+            <label>
+              <span>模型名称</span>
+              <input id="llmModel" maxlength="128" autocomplete="off"
+                placeholder="例如 gpt-5.6-terra、deepseek-chat、qwen-plus" />
+            </label>
+            <label>
+              <span>API Key</span>
+              <input id="llmApiKey" type="password" maxlength="512" autocomplete="new-password"
+                placeholder="留空表示保留已保存的密钥" />
+            </label>
+            <p class="llm-key-state" id="llmKeyState"></p>
+          </div>
+          <div class="llm-settings-note">
+            支持 OpenAI 兼容的 <code>/chat/completions</code> 接口。自定义地址必须是公开 HTTPS 地址。
+          </div>
+          <div class="llm-settings-message" id="llmSettingsMessage" role="status"></div>
+          <footer class="llm-settings-actions">
+            <button id="llmSettingsCancel" type="button">取消</button>
+            <button class="primary" id="llmSettingsSave" type="submit">保存配置</button>
+          </footer>
+        </form>
+      </section>
+    </div>
+
     <!-- ═══ 开场动画（Splash Screen）═══ -->
     <div class="splash-screen" id="splashScreen">
       <div class="splash-bg-circle"></div>
@@ -73,6 +118,7 @@
         <div class="user-session">
           <span class="user-avatar">👤</span>
           <span id="currentUsername"></span>
+          <button id="llmSettingsButton" type="button" title="配置当前账号的大模型 API">API</button>
           <button id="logoutButton" type="button">退出</button>
         </div>
         <button id="openAiPage" class="ai-enter-btn" title="进入 AI 助手全屏界面">
