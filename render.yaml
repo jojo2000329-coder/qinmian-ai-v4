@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: qinmian-ai-v4
+    runtime: docker
+    plan: starter
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: QINMIAN_LLM_PROVIDER
+        value: yizhineng-openai
+      - key: QINMIAN_LLM_BASE_URL
+        value: https://yizhinengai.com/v1
+      - key: QINMIAN_LLM_MODEL
+        value: gpt-5.6-terra
+      - key: QINMIAN_VISION_MODEL
+        value: gpt-5.6-terra
+      - key: QINMIAN_LLM_API_KEY
+        sync: false
+      - key: QINMIAN_SECRET_KEY
+        generateValue: true
+      - key: QINMIAN_COOKIE_SECURE
+        value: "1"
+      - key: QINMIAN_MUTABLE_DATA_DIR
+        value: /var/data/qinmian
+    disk:
+      name: qinmian-user-data
+      mountPath: /var/data/qinmian
+      sizeGB: 1

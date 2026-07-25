@@ -1,0 +1,109 @@
+{
+  "notice": "以下为演示任课与论文标题数据，用于展示教师匹配算法。请用教务系统、学院官网或教师主页导出的真实数据替换。",
+  "professors": [
+    {
+      "id": "demo-prof-ai-chen",
+      "name": "示例教师-陈明",
+      "college": "计算机科学与技术学院",
+      "title": "教授",
+      "research_interests": ["机器学习", "深度学习", "自然语言处理", "智能软件工程"],
+      "papers": [
+        "A Survey on Robust Representation Learning for Low-Resource NLP",
+        "Graph Neural Networks for Software Defect Prediction",
+        "Efficient Fine-Tuning Methods for Domain-Specific Language Models"
+      ],
+      "courses": ["机器学习", "深度学习", "自然语言处理", "数据结构"]
+    },
+    {
+      "id": "demo-prof-sys-lin",
+      "name": "示例教师-林珊",
+      "college": "计算机科学与技术学院",
+      "title": "副教授",
+      "research_interests": ["操作系统", "分布式系统", "云计算", "系统安全"],
+      "papers": [
+        "Scheduling-Aware Resource Allocation in Cloud-Native Systems",
+        "A Lightweight Runtime Monitor for Container Security",
+        "Performance Modeling for Distributed Storage Systems"
+      ],
+      "courses": ["操作系统", "云计算与分布式系统", "计算机网络"]
+    },
+    {
+      "id": "demo-prof-data-wang",
+      "name": "示例教师-王若水",
+      "college": "工学院",
+      "title": "教授",
+      "research_interests": ["数据挖掘", "大数据分析", "推荐系统", "工业智能"],
+      "papers": [
+        "Industrial Time-Series Forecasting with Multi-Scale Attention",
+        "Explainable Recommendation for Smart Manufacturing Services",
+        "Privacy-Preserving Data Mining in Edge Environments"
+      ],
+      "courses": ["数据挖掘", "Python数据分析", "数据科学导论"]
+    },
+    {
+      "id": "demo-prof-ic-zhang",
+      "name": "示例教师-张闻",
+      "college": "信息科学与工程学院",
+      "title": "教授",
+      "research_interests": ["集成电路设计", "低功耗芯片", "EDA", "智能传感器"],
+      "papers": [
+        "Low-Power SRAM Design for Edge AI Accelerators",
+        "Timing Closure Optimization with Learning-Based EDA Flows",
+        "CMOS Sensor Interface Circuits for Biomedical Applications"
+      ],
+      "courses": ["集成电路设计基础", "数字电子技术", "智能传感器"]
+    },
+    {
+      "id": "demo-prof-fintech-li",
+      "name": "示例教师-李清",
+      "college": "经济与金融学院",
+      "title": "副教授",
+      "research_interests": ["金融科技", "量化投资", "风险管理", "计量经济学"],
+      "papers": [
+        "Machine Learning Methods for Credit Risk Forecasting",
+        "High-Frequency Trading Signals and Market Microstructure",
+        "FinTech Adoption and Household Financial Behavior"
+      ],
+      "courses": ["金融科技", "计量经济学", "Python量化分析"]
+    },
+    {
+      "id": "demo-prof-business-zhao",
+      "name": "示例教师-赵一帆",
+      "college": "工商管理学院",
+      "title": "讲师",
+      "research_interests": ["商业分析", "数字营销", "供应链管理", "用户增长"],
+      "papers": [
+        "Causal Inference for Online Marketing Experiments",
+        "Demand Forecasting in Omnichannel Retail",
+        "Consumer Response to Personalized Recommendation"
+      ],
+      "courses": ["商业数据分析", "数字营销", "供应链分析"]
+    },
+    {
+      "id": "demo-prof-arch-huang",
+      "name": "示例教师-黄岚",
+      "college": "建筑学院",
+      "title": "教授",
+      "research_interests": ["城市更新", "建筑设计", "历史街区保护", "智慧建造"],
+      "papers": [
+        "Urban Renewal Strategies for Historic Districts in Coastal Cities",
+        "Generative Design Methods for Community Public Space",
+        "Digital Twin Applications in Building Lifecycle Management"
+      ],
+      "courses": ["建筑设计基础", "城市地下空间工程导论", "智慧建造专题"]
+    },
+    {
+      "id": "demo-prof-med-xu",
+      "name": "示例教师-许安",
+      "college": "医学院",
+      "title": "教授",
+      "research_interests": ["临床医学", "医学影像", "生物医药", "医学人工智能"],
+      "papers": [
+        "Deep Learning for Multi-Modal Medical Image Diagnosis",
+        "Biomarker Discovery in Translational Medicine",
+        "Clinical Decision Support with Explainable AI"
+      ],
+      "courses": ["医学人工智能导论", "药理学", "循证医学"]
+    }
+  ]
+}

@@ -1,0 +1,226 @@
+{
+  "credit_rules": {
+    "default": {
+      "graduation_total": 160,
+      "categories": {
+        "通识必修": 34,
+        "学科基础": 34,
+        "专业必修": 36,
+        "专业选修": 24,
+        "通识选修": 10,
+        "实践与创新": 22
+      }
+    },
+    "medicine": {
+      "graduation_total": 230,
+      "categories": {
+        "通识必修": 38,
+        "学科基础": 48,
+        "专业必修": 76,
+        "专业选修": 20,
+        "通识选修": 10,
+        "实践与创新": 38
+      }
+    },
+    "architecture": {
+      "graduation_total": 190,
+      "categories": {
+        "通识必修": 34,
+        "学科基础": 40,
+        "专业必修": 52,
+        "专业选修": 24,
+        "通识选修": 10,
+        "实践与创新": 30
+      }
+    },
+    "art": {
+      "graduation_total": 170,
+      "categories": {
+        "通识必修": 30,
+        "学科基础": 36,
+        "专业必修": 46,
+        "专业选修": 26,
+        "通识选修": 8,
+        "实践与创新": 24
+      }
+    }
+  },
+  "common_courses": [
+    {"name": "思想道德与法治", "category": "通识必修", "credits": 3, "semester": 1},
+    {"name": "中国近现代史纲要", "category": "通识必修", "credits": 3, "semester": 2},
+    {"name": "马克思主义基本原理", "category": "通识必修", "credits": 3, "semester": 3},
+    {"name": "毛泽东思想和中国特色社会主义理论体系概论", "category": "通识必修", "credits": 3, "semester": 4},
+    {"name": "大学英语", "category": "通识必修", "credits": 8, "semester": 1},
+    {"name": "大学体育", "category": "通识必修", "credits": 4, "semester": 1},
+    {"name": "军事理论与训练", "category": "实践与创新", "credits": 2, "semester": 1},
+    {"name": "创新创业基础", "category": "实践与创新", "credits": 2, "semester": 3},
+    {"name": "社会实践", "category": "实践与创新", "credits": 2, "semester": 5}
+  ],
+  "templates": {
+    "computer": {
+      "required": [
+        {"name": "高等数学A", "category": "学科基础", "credits": 10, "semester": 1},
+        {"name": "线性代数", "category": "学科基础", "credits": 3, "semester": 2},
+        {"name": "概率论与数理统计", "category": "学科基础", "credits": 3, "semester": 3},
+        {"name": "程序设计基础", "category": "专业必修", "credits": 4, "semester": 1},
+        {"name": "离散数学", "category": "专业必修", "credits": 4, "semester": 2},
+        {"name": "数据结构", "category": "专业必修", "credits": 4, "semester": 3},
+        {"name": "计算机组成原理", "category": "专业必修", "credits": 4, "semester": 3},
+        {"name": "操作系统", "category": "专业必修", "credits": 4, "semester": 4},
+        {"name": "数据库系统原理", "category": "专业必修", "credits": 4, "semester": 4},
+        {"name": "计算机网络", "category": "专业必修", "credits": 4, "semester": 5},
+        {"name": "软件工程", "category": "专业必修", "credits": 3, "semester": 5},
+        {"name": "毕业设计", "category": "实践与创新", "credits": 8, "semester": 8}
+      ],
+      "electives": [
+        {"name": "机器学习", "category": "专业选修", "credits": 3, "semester": 5},
+        {"name": "深度学习", "category": "专业选修", "credits": 3, "semester": 6},
+        {"name": "自然语言处理", "category": "专业选修", "credits": 2, "semester": 6},
+        {"name": "数据挖掘", "category": "专业选修", "credits": 3, "semester": 6},
+        {"name": "云计算与分布式系统", "category": "专业选修", "credits": 2, "semester": 7},
+        {"name": "网络安全技术", "category": "专业选修", "credits": 2, "semester": 7}
+      ]
+    },
+    "electronics": {
+      "required": [
+        {"name": "高等数学A", "category": "学科基础", "credits": 10, "semester": 1},
+        {"name": "大学物理", "category": "学科基础", "credits": 6, "semester": 2},
+        {"name": "电路分析", "category": "专业必修", "credits": 4, "semester": 2},
+        {"name": "模拟电子技术", "category": "专业必修", "credits": 4, "semester": 3},
+        {"name": "数字电子技术", "category": "专业必修", "credits": 4, "semester": 3},
+        {"name": "信号与系统", "category": "专业必修", "credits": 4, "semester": 4},
+        {"name": "通信原理", "category": "专业必修", "credits": 4, "semester": 5},
+        {"name": "嵌入式系统", "category": "专业必修", "credits": 3, "semester": 6},
+        {"name": "电子系统综合设计", "category": "实践与创新", "credits": 4, "semester": 6},
+        {"name": "毕业设计", "category": "实践与创新", "credits": 8, "semester": 8}
+      ],
+      "electives": [
+        {"name": "集成电路设计基础", "category": "专业选修", "credits": 3, "semester": 5},
+        {"name": "数字信号处理", "category": "专业选修", "credits": 3, "semester": 5},
+        {"name": "射频电路", "category": "专业选修", "credits": 2, "semester": 6},
+        {"name": "智能传感器", "category": "专业选修", "credits": 2, "semester": 7}
+      ]
+    },
+    "electrical": {
+      "extends": "electronics",
+      "required": [
+        {"name": "电机学", "category": "专业必修", "credits": 4, "semester": 4},
+        {"name": "电力电子技术", "category": "专业必修", "credits": 3, "semester": 5},
+        {"name": "自动控制原理", "category": "专业必修", "credits": 4, "semester": 5}
+      ],
+      "electives": [
+        {"name": "智能电网", "category": "专业选修", "credits": 2, "semester": 6},
+        {"name": "新能源发电技术", "category": "专业选修", "credits": 2, "semester": 7}
+      ]
+    },
+    "mechanical": {
+      "required": [
+        {"name": "高等数学A", "category": "学科基础", "credits": 10, "semester": 1},
+        {"name": "工程制图", "category": "学科基础", "credits": 4, "semester": 1},
+        {"name": "理论力学", "category": "学科基础", "credits": 4, "semester": 2},
+        {"name": "材料力学", "category": "学科基础", "credits": 4, "semester": 3},
+        {"name": "机械原理", "category": "专业必修", "credits": 4, "semester": 3},
+        {"name": "机械设计", "category": "专业必修", "credits": 4, "semester": 4},
+        {"name": "控制工程基础", "category": "专业必修", "credits": 3, "semester": 5},
+        {"name": "制造技术基础", "category": "专业必修", "credits": 3, "semester": 5},
+        {"name": "机械综合课程设计", "category": "实践与创新", "credits": 4, "semester": 6},
+        {"name": "毕业设计", "category": "实践与创新", "credits": 8, "semester": 8}
+      ],
+      "electives": [
+        {"name": "机器人技术", "category": "专业选修", "credits": 3, "semester": 6},
+        {"name": "智能制造系统", "category": "专业选修", "credits": 3, "semester": 6},
+        {"name": "新能源汽车技术", "category": "专业选修", "credits": 2, "semester": 7}
+      ]
+    },
+    "math": {
+      "required": [
+        {"name": "数学分析", "category": "学科基础", "credits": 12, "semester": 1},
+        {"name": "高等代数", "category": "学科基础", "credits": 8, "semester": 1},
+        {"name": "解析几何", "category": "学科基础", "credits": 3, "semester": 1},
+        {"name": "常微分方程", "category": "专业必修", "credits": 3, "semester": 3},
+        {"name": "概率论", "category": "专业必修", "credits": 4, "semester": 3},
+        {"name": "数理统计", "category": "专业必修", "credits": 4, "semester": 4},
+        {"name": "数学建模", "category": "专业必修", "credits": 3, "semester": 5},
+        {"name": "毕业论文", "category": "实践与创新", "credits": 8, "semester": 8}
+      ],
+      "electives": [
+        {"name": "机器学习数学基础", "category": "专业选修", "credits": 3, "semester": 5},
+        {"name": "金融时间序列", "category": "专业选修", "credits": 3, "semester": 6},
+        {"name": "优化方法", "category": "专业选修", "credits": 3, "semester": 6},
+        {"name": "Python数据分析", "category": "专业选修", "credits": 2, "semester": 5}
+      ]
+    },
+    "economics": {
+      "required": [
+        {"name": "微观经济学", "category": "专业必修", "credits": 4, "semester": 2},
+        {"name": "宏观经济学", "category": "专业必修", "credits": 4, "semester": 3},
+        {"name": "计量经济学", "category": "专业必修", "credits": 4, "semester": 4},
+        {"name": "金融学", "category": "专业必修", "credits": 3, "semester": 4},
+        {"name": "国际经济学", "category": "专业必修", "credits": 3, "semester": 5},
+        {"name": "经济数据分析", "category": "专业必修", "credits": 3, "semester": 5},
+        {"name": "毕业论文", "category": "实践与创新", "credits": 8, "semester": 8}
+      ],
+      "electives": [
+        {"name": "金融科技", "category": "专业选修", "credits": 2, "semester": 5},
+        {"name": "投资学", "category": "专业选修", "credits": 3, "semester": 6},
+        {"name": "跨境电商实务", "category": "专业选修", "credits": 2, "semester": 6},
+        {"name": "Python量化分析", "category": "专业选修", "credits": 2, "semester": 7}
+      ]
+    },
+    "business": {
+      "required": [
+        {"name": "管理学", "category": "专业必修", "credits": 3, "semester": 2},
+        {"name": "会计学", "category": "专业必修", "credits": 3, "semester": 2},
+        {"name": "市场营销学", "category": "专业必修", "credits": 3, "semester": 3},
+        {"name": "运营管理", "category": "专业必修", "credits": 3, "semester": 4},
+        {"name": "商业数据分析", "category": "专业必修", "credits": 3, "semester": 5},
+        {"name": "战略管理", "category": "专业必修", "credits": 3, "semester": 6},
+        {"name": "毕业论文", "category": "实践与创新", "credits": 8, "semester": 8}
+      ],
+      "electives": [
+        {"name": "数字营销", "category": "专业选修", "credits": 2, "semester": 5},
+        {"name": "智能财务", "category": "专业选修", "credits": 2, "semester": 6},
+        {"name": "供应链分析", "category": "专业选修", "credits": 2, "semester": 6},
+        {"name": "用户增长与A/B测试", "category": "专业选修", "credits": 2, "semester": 7}
+      ]
+    },
+    "law": {
+      "required": [
+        {"name": "法理学", "category": "专业必修", "credits": 4, "semester": 1},
+        {"name": "宪法学", "category": "专业必修", "credits": 3, "semester": 2},
+        {"name": "民法学", "category": "专业必修", "credits": 5, "semester": 3},
+        {"name": "刑法学", "category": "专业必修", "credits": 5, "semester": 3},
+        {"name": "行政法与行政诉讼法", "category": "专业必修", "credits": 4, "semester": 4},
+        {"name": "商法学", "category": "专业必修", "credits": 4, "semester": 5},
+        {"name": "毕业论文", "category": "实践与创新", "credits": 8, "semester": 8}
+      ],
+      "electives": [
+        {"name": "知识产权法", "category": "专业选修", "credits": 2, "semester": 5},
+        {"name": "数据合规与网络法", "category": "专业选修", "credits": 2, "semester": 6},
+        {"name": "涉外法律实务", "category": "专业选修", "credits": 2, "semester": 7}
+      ]
+    },
+    "medicine": {
+      "required": [
+        {"name": "系统解剖学", "category": "学科基础", "credits": 6, "semester": 1},
+        {"name": "组织学与胚胎学", "category": "学科基础", "credits": 4, "semester": 2},
+        {"name": "生理学", "category": "专业必修", "credits": 5, "semester": 3},
+        {"name": "病理学", "category": "专业必修", "credits": 5, "semester": 4},
+        {"name": "药理学", "category": "专业必修", "credits": 5, "semester": 5},
+        {"name": "内科学", "category": "专业必修", "credits": 8, "semester": 7},
+        {"name": "外科学", "category": "专业必修", "credits": 8, "semester": 8},
+        {"name": "临床实习", "category": "实践与创新", "credits": 32, "semester": 9}
+      ],
+      "electives": [
+        {"name": "医学人工智能导论", "category": "专业选修", "credits": 2, "semester": 6},
+        {"name": "循证医学", "category": "专业选修", "credits": 2, "semester": 7}
+      ]
+    }
+  },
+  "general_electives": [
+    {"name": "人工智能伦理", "category": "通识选修", "credits": 2, "semester": 5},
+    {"name": "科技论文写作", "category": "通识选修", "credits": 2, "semester": 6},
+    {"name": "海外华文文化", "category": "通识选修", "credits": 2, "semester": 3},
+    {"name": "公共表达与沟通", "category": "通识选修", "credits": 2, "semester": 4}
+  ]
+}

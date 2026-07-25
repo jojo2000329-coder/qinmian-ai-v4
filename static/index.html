@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>勤勉 AI — 晴空 · 学业规划助手</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <!-- ═══ 用户登录/注册 ═══ -->
+    <div class="auth-overlay" id="authOverlay" hidden>
+      <div class="auth-card">
+        <div class="auth-brand">
+          <div class="auth-brand-icon">☀</div>
+          <h1>勤勉 AI</h1>
+          <p>登录后，你的对话、长期记忆和使用偏好将独立保存。</p>
+        </div>
+        <div class="auth-tabs" role="tablist" aria-label="账号操作">
+          <button type="button" class="active" data-auth-mode="login">登录</button>
+          <button type="button" data-auth-mode="register">注册</button>
+        </div>
+        <form id="authForm" class="auth-form">
+          <label>
+            <span>用户名</span>
+            <input id="authUsername" name="username" autocomplete="username" maxlength="32" required
+              placeholder="3–32 个字符" />
+          </label>
+          <label>
+            <span>密码</span>
+            <input id="authPassword" name="password" type="password" autocomplete="current-password"
+              maxlength="128" required placeholder="至少 8 个字符" />
+          </label>
+          <label id="authConfirmRow" hidden>
+            <span>确认密码</span>
+            <input id="authPasswordConfirm" name="password_confirm" type="password"
+              autocomplete="new-password" maxlength="128" placeholder="再次输入密码" />
+          </label>
+          <div class="auth-error" id="authError" role="alert"></div>
+          <button class="auth-submit" id="authSubmit" type="submit">登录</button>
+        </form>
+        <div class="auth-privacy">密码只保存为安全哈希，服务器不会保存明文密码。</div>
+      </div>
+    </div>
+
+    <!-- ═══ 开场动画（Splash Screen）═══ -->
+    <div class="splash-screen" id="splashScreen">
+      <div class="splash-bg-circle"></div>
+      <div class="splash-bg-circle"></div>
+      <div class="splash-bg-circle"></div>
+      <div class="splash-content">
+        <div class="splash-icon">☀</div>
+        <div class="splash-title">勤勉 AI</div>
+        <div class="splash-subtitle">晴 空 · 学 业 规 划</div>
+        <div class="splash-tagline">华侨大学 2026 · 天蓝色智能助手</div>
+        <div class="splash-loader">
+          <i></i><i></i><i></i><i></i><i></i>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ 粒子动效背景 ═══ -->
+    <canvas id="particleCanvas"></canvas>
+
+    <!-- ═══ 顶部导航栏 ═══ -->
+    <header class="topbar">
+      <div>
+        <div class="brand">☀ 勤勉</div>
+        <div class="subbrand">华侨大学 2026 · 晴空学业规划 · 天蓝选课</div>
+      </div>
+      <div class="topbar-controls">
+        <div class="source" id="sourceLine" style="display:none"></div>
+        <div class="user-session">
+          <span class="user-avatar">👤</span>
+          <span id="currentUsername"></span>
+          <button id="logoutButton" type="button">退出</button>
+        </div>
+        <button id="openAiPage" class="ai-enter-btn" title="进入 AI 助手全屏界面">
+          <span class="ai-enter-icon">☀</span>
+          <span>AI 助手</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- ═══ 主页面（不含 AI 全屏页面时显示） ═══ -->
+    <div id="mainApp">
+      <div class="shell">
+        <aside class="sidebar">
+          <div class="filter-grid">
+            <label>
+              <span>🔍 搜索专业/学院/方向</span>
+              <input id="majorSearch" placeholder="例如 人工智能、金融、厦门" />
+            </label>
+            <label>
+              <span>🏛 校区</span>
+              <select id="campusFilter"></select>
+            </label>
+            <label>
+              <span>📚 学院</span>
+              <select id="collegeFilter"></select>
+            </label>
+            <label>
+              <span>🏷 学科标签</span>
+              <select id="disciplineFilter"></select>
+            </label>
+          </div>
+          <div class="major-count" id="majorCount"></div>
+          <div class="major-list" id="majorList"></div>
+        </aside>
+
+        <main class="workspace">
+          <section class="major-head" id="majorHead"></section>
+          <nav class="tabs" id="tabs">
+            <button data-tab="profile" class="active">📋 专业画像</button>
+            <button data-tab="career">🎯 职业规划</button>
+            <button data-tab="credits">💊 学分体检</button>
+            <button data-tab="hardness">⚡ 课程硬核</button>
+            <button data-tab="seats">📡 抢课监控</button>
+            <button data-tab="conflict">🔧 冲突微调</button>
+            <button data-tab="professor">👨‍🏫 教授匹配</button>
+          </nav>
+          <section class="tab-body" id="tabBody"></section>
+        </main>
+      </div>
+    </div>
+
+    <!-- ═══ 浮动聊天（非 AI 全屏时显示） ═══ -->
+    <section class="floating-chat open" id="floatingChat">
+      <div class="floating-chat-head">
+        <div>
+          <strong>☀ 勤勉 AI 对话</strong>
+          <span id="llmStatusLine">可问专业、课表、学分、老师、抢课</span>
+        </div>
+        <div class="floating-chat-head-actions">
+          <button id="openAiPageFromFloat" class="float-ai-btn" title="全屏 AI 助手">☀</button>
+          <button id="floatingChatToggle" title="收起或展开对话">−</button>
+        </div>
+      </div>
+      <div class="floating-chat-body" id="floatingChatBody">
+        <div class="floating-tools">
+          <label class="floating-persona">
+            <span>🧠 人格</span>
+            <select id="floatingPersona"></select>
+          </label>
+          <label class="floating-toggle">
+            <span>🧠 大模型</span>
+            <label class="switch">
+              <input type="checkbox" id="toggleLLM" />
+              <span class="slider"></span>
+            </label>
+          </label>
+          <label class="floating-toggle">
+            <span>💾 记忆</span>
+            <label class="switch">
+              <input type="checkbox" id="toggleMemory" checked />
+              <span class="slider"></span>
+            </label>
+          </label>
+        </div>
+        <div class="floating-chat-log" id="floatingChatLog"></div>
+        <div class="floating-chat-form">
+          <input id="floatingChatInput" placeholder="直接问：算法工程师怎么排课？" />
+          <button class="primary" id="floatingChatSend">➤</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ AI 全屏助手页面 ═══ -->
+    <div class="ai-fullscreen-overlay" id="aiFullscreenPage">
+      <div class="ai-fullscreen">
+        <!-- 左侧：对话列表 -->
+        <aside class="ai-sidebar">
+          <div class="ai-sidebar-header">
+            <h2>☀ 勤勉记忆</h2>
+            <div class="ai-sidebar-actions">
+              <button id="aiNewConversation" class="ai-btn-icon" title="新建对话">✚</button>
+              <button id="aiClosePage" class="ai-btn-icon" title="返回主界面">⊞</button>
+            </div>
+          </div>
+          <div class="ai-toggle-group">
+            <label class="floating-toggle">
+              <span>🧠 大模型</span>
+              <label class="switch sm">
+                <input type="checkbox" id="aiToggleLLM" />
+                <span class="slider"></span>
+              </label>
+            </label>
+            <label class="floating-toggle">
+              <span>💾 长期记忆</span>
+              <label class="switch sm">
+                <input type="checkbox" id="aiToggleMemory" checked />
+                <span class="slider"></span>
+              </label>
+            </label>
+          </div>
+          <div class="ai-conv-search">
+            <input id="aiConvSearch" placeholder="🔍 搜索对话历史..." />
+          </div>
+          <div class="ai-conv-list" id="aiConvList">
+            <div class="ai-conv-loading">加载对话历史...</div>
+          </div>
+          <div class="ai-sidebar-footer">
+            <span id="aiConvCount">0 条对话</span>
+            <button id="aiClearMemory" class="ai-btn-text" title="清空知识库">清空记忆</button>
+          </div>
+        </aside>
+
+        <!-- 右侧：聊天区域 -->
+        <main class="ai-main">
+          <div class="ai-main-header">
+            <div class="ai-main-header-info">
+              <span class="ai-conv-title" id="aiConvTitle" ondblclick="startRenameConv(state.activeConvId, this)" style="cursor:pointer" title="双击重命名">当前对话</span>
+              <span class="ai-conv-badge" id="aiConvBadge"></span>
+              <button class="ai-rename-title-btn" onclick="startRenameConv(state.activeConvId, document.getElementById('aiConvTitle'))" title="重命名">✎</button>
+            </div>
+            <div class="ai-main-header-actions">
+              <label class="ai-persona-select"><span>🧠</span>
+                <select id="aiPersona"></select>
+              </label>
+              <button id="aiDeleteConversation" class="ai-btn-icon" title="删除当前对话">🗑</button>
+            </div>
+          </div>
+          <div class="ai-messages" id="aiMessages">
+            <div class="ai-welcome">
+              <div class="ai-welcome-icon">☀</div>
+              <h1>勤勉 AI 助手</h1>
+              <p>华侨大学学业规划 · 晴空智能分析</p>
+              <div class="ai-welcome-suggestions">
+                <button class="ai-chip" data-suggest="算法工程师4年课表怎么做">🎯 算法工程师课表</button>
+                <button class="ai-chip" data-suggest="数据结构这门课难吗">⚡ 课程难度分析</button>
+                <button class="ai-chip" data-suggest="计算机科学与技术学院有哪些老师">👨‍🏫 查老师</button>
+                <button class="ai-chip" data-suggest="推荐热门5个专业方向">🔥 热门方向</button>
+                <button class="ai-chip" data-suggest="人工智能专业毕业要多少学分">📊 学分查询</button>
+                <button class="ai-chip" data-suggest="帮我做学分体检">💊 学分体检</button>
+              </div>
+            </div>
+          </div>
+          <div class="ai-input-area">
+            <div class="ai-input-row">
+              <input type="file" id="aiFileInput" accept="image/*,.pdf,.docx,.xlsx,.xlsm,.csv,.txt,.json" style="display:none" />
+              <button class="ai-upload-btn" id="aiUploadBtn" title="上传图片/文件">📎</button>
+              <input id="aiChatInput" placeholder="输入问题，或上传课表图片、PDF、Word、Excel..." />
+              <button class="ai-send-btn" id="aiChatSend">➤</button>
+            </div>
+            <div id="aiFilePreview" style="display:none;padding:6px 12px;font-size:11px;color:#94a3b8;background:rgba(14,165,233,0.04);border-top:1px solid rgba(14,165,233,0.08)">
+              <span id="aiFileName"></span>
+              <span id="aiFileRemove" style="cursor:pointer;color:#ef4444;margin-left:8px">✕ 移除</span>
+            </div>
+            <div class="ai-input-footer">
+              <span>勤勉 v4 · 知识库长期记忆已<span id="aiMemoryStatus">开启</span></span>
+              <span id="aiModelStatus"></span>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <template id="emptyStateTemplate">
+      <div class="empty-state">请选择一个专业，勤勉会加载课程、学分与推荐方案。</div>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

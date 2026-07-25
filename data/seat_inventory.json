@@ -1,0 +1,64 @@
+{
+  "offerings": [
+    {
+      "id": "seat-ds-a",
+      "course": "数据结构",
+      "section": "01",
+      "teacher": "示例教师-陈明",
+      "day": "周二",
+      "start": "08:00",
+      "end": "09:40",
+      "capacity": 80,
+      "enrolled": 80,
+      "campus": "厦门校区"
+    },
+    {
+      "id": "seat-os-a",
+      "course": "操作系统",
+      "section": "01",
+      "teacher": "示例教师-林珊",
+      "day": "周三",
+      "start": "10:10",
+      "end": "11:50",
+      "capacity": 70,
+      "enrolled": 69,
+      "campus": "厦门校区"
+    },
+    {
+      "id": "seat-ml-a",
+      "course": "机器学习",
+      "section": "01",
+      "teacher": "示例教师-陈明",
+      "day": "周四",
+      "start": "14:30",
+      "end": "16:10",
+      "capacity": 60,
+      "enrolled": 60,
+      "campus": "厦门校区"
+    },
+    {
+      "id": "seat-ic-a",
+      "course": "集成电路设计基础",
+      "section": "01",
+      "teacher": "示例教师-张闻",
+      "day": "周二",
+      "start": "14:30",
+      "end": "16:10",
+      "capacity": 50,
+      "enrolled": 50,
+      "campus": "厦门校区"
+    },
+    {
+      "id": "seat-business-data-a",
+      "course": "商业数据分析",
+      "section": "01",
+      "teacher": "示例教师-赵一帆",
+      "day": "周五",
+      "start": "10:10",
+      "end": "11:50",
+      "capacity": 90,
+      "enrolled": 86,
+      "campus": "泉州校区"
+    }
+  ]
+}

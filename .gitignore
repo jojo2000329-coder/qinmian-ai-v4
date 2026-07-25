@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.playwright-cli/
+_v3_temp/
+server.*.log
+*.zip
+.env
+.env.*
+!.env.example
+data/llm_config.local.json
+data/conversations/*.json
+data/knowledge_base/records.json
+data/users.json
+data/user_data/
+data/.session_secret
+.test_runtime_deps/

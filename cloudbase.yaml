@@ -1,0 +1,19 @@
+spec:
+  name: qinmian-ai-v4
+  type: kubernetes
+  container:
+    port: 8080
+    health_check_path: /health
+    cpu: 0.5
+    memory: 1Gi
+    minReplicas: 1
+    maxReplicas: 2
+    env:
+      - name: PORT
+        value: "8080"
+      - name: TZ
+        value: Asia/Shanghai
+  service:
+    enable: true
+    protocol: http
+    timeout: 120

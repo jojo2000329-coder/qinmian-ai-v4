@@ -1,0 +1,16 @@
+.git
+.gitignore
+.pytest_cache
+.playwright-cli
+__pycache__
+*.py[cod]
+*.log
+*.zip
+_v3_temp
+tests
+data/llm_config.local.json
+data/conversations/*.json
+data/knowledge_base/records.json
+data/users.json
+data/user_data/
+data/.session_secret

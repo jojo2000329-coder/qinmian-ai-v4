@@ -1,0 +1,76 @@
+{
+  "reviews": [
+    {
+      "course": "数据结构",
+      "source": "forum-demo",
+      "text": "作业量偏大，周周有代码题，但是干货很足，算法思维提升明显，给分中等偏严。",
+      "rating": 4
+    },
+    {
+      "course": "数据结构",
+      "source": "forum-demo",
+      "text": "实验多，期末不简单，老师讲得清楚。认真刷题能拿高分。",
+      "rating": 4
+    },
+    {
+      "course": "操作系统",
+      "source": "forum-demo",
+      "text": "项目很硬核，进程调度和文件系统实验很肝，但是真的有用。",
+      "rating": 5
+    },
+    {
+      "course": "操作系统",
+      "source": "forum-demo",
+      "text": "给分不算宽松，平时作业和实验都要跟上，干货程度高。",
+      "rating": 4
+    },
+    {
+      "course": "机器学习",
+      "source": "forum-demo",
+      "text": "作业量中等，数学推导比较多，项目有挑战，给分友好，适合算法方向。",
+      "rating": 5
+    },
+    {
+      "course": "机器学习",
+      "source": "forum-demo",
+      "text": "课程很有用，能接上深度学习；如果线代概率不好会吃力。",
+      "rating": 5
+    },
+    {
+      "course": "高等数学A",
+      "source": "forum-demo",
+      "text": "内容扎实，作业不少，考试区分度大，想高分要持续练习。",
+      "rating": 4
+    },
+    {
+      "course": "商业数据分析",
+      "source": "forum-demo",
+      "text": "案例很多，作业量适中，给分比较友好，干货主要在项目报告。",
+      "rating": 4
+    },
+    {
+      "course": "集成电路设计基础",
+      "source": "forum-demo",
+      "text": "门槛高，实验和版图任务重，但对芯片方向很关键，给分中等。",
+      "rating": 5
+    },
+    {
+      "course": "数字信号处理",
+      "source": "forum-demo",
+      "text": "公式密集，作业多，老师讲课节奏快，干货非常足。",
+      "rating": 4
+    },
+    {
+      "course": "医学人工智能导论",
+      "source": "forum-demo",
+      "text": "作业少，内容新，项目展示给分友好，但深度要靠自己扩展。",
+      "rating": 4
+    },
+    {
+      "course": "建筑设计基础",
+      "source": "forum-demo",
+      "text": "画图和改图时间很多，熬夜风险高，老师反馈细，作品集收益大。",
+      "rating": 5
+    }
+  ]
+}
