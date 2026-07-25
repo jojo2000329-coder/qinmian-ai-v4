@@ -16,6 +16,7 @@ from typing import Any
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .data_store import PROJECT_ROOT
+from .persistence import database_enabled, load_document, save_document
 
 
 MUTABLE_DATA_DIR = Path(
@@ -110,36 +111,47 @@ def bootstrap_user_data(user_id: str) -> None:
 
 
 class UserStore:
-    """JSON-backed user registry. Passwords are stored only as secure hashes."""
+    """User registry backed by PostgreSQL in cloud and JSON during local runs."""
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or USERS_FILE
+        self._database = path is None and database_enabled()
         self._users: list[dict[str, Any]] = []
         self._load()
 
     def _load(self) -> None:
         with _LOCK:
-            if not self.path.exists():
-                self._users = []
-                return
             try:
-                payload = json.loads(self.path.read_text(encoding="utf-8"))
+                if self._database:
+                    payload = load_document(
+                        "system",
+                        "global",
+                        "users",
+                        {"users": []},
+                    )
+                else:
+                    if not self.path.exists():
+                        self._users = []
+                        return
+                    payload = json.loads(self.path.read_text(encoding="utf-8"))
                 self._users = [
                     row for row in payload.get("users", [])
                     if isinstance(row, dict) and row.get("id") and row.get("password_hash")
                 ]
             except (AttributeError, TypeError, json.JSONDecodeError, OSError) as exc:
-                raise RuntimeError(f"用户注册表无法读取：{self.path}") from exc
+                location = "PostgreSQL" if self._database else str(self.path)
+                raise RuntimeError(f"用户注册表无法读取：{location}") from exc
 
     def _save(self) -> None:
-        _atomic_write_json(
-            self.path,
-            {
-                "version": 1,
-                "updated_at": _timestamp(),
-                "users": self._users,
-            },
-        )
+        payload = {
+            "version": 1,
+            "updated_at": _timestamp(),
+            "users": self._users,
+        }
+        if self._database:
+            save_document("system", "global", "users", payload)
+        else:
+            _atomic_write_json(self.path, payload)
 
     @staticmethod
     def public_user(user: dict[str, Any]) -> dict[str, Any]:

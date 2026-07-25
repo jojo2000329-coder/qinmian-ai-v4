@@ -25,6 +25,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .persistence import database_enabled, load_document, save_document
 from .vector_store import VectorStore
 
 
@@ -62,9 +63,14 @@ class KnowledgeBase:
         context = kb.get_relevant_context("机器学习", max_items=3)
     """
 
-    def __init__(self, store_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        store_path: str | Path | None = None,
+        owner_id: str = "legacy",
+    ) -> None:
         self._enabled: bool = True
         self._knowledge_file = Path(store_path) if store_path else KNOWLEDGE_FILE
+        self._owner_id = owner_id
         self._vector_store = VectorStore(self._knowledge_file)
         self._lock = threading.RLock()
         self._load()
@@ -99,12 +105,26 @@ class KnowledgeBase:
                 for record in domain_records
                 if record.get("metadata", {}).get("aspect")
             }),
-            "storage_path": str(self._knowledge_file),
+            "storage_path": (
+                f"postgresql://knowledge/{self._owner_id}"
+                if database_enabled()
+                else str(self._knowledge_file)
+            ),
         }
 
     # ── 持久化 ──────────────────────────────────────────────────
 
     def _load(self) -> None:
+        if database_enabled():
+            payload = load_document(
+                "knowledge",
+                self._owner_id,
+                "records",
+                {"version": 2, "records": []},
+            )
+            if isinstance(payload, dict):
+                self._vector_store.vectors = payload.get("records", [])
+            return
         self._knowledge_file.parent.mkdir(parents=True, exist_ok=True)
         if self._knowledge_file.exists():
             try:
@@ -113,6 +133,18 @@ class KnowledgeBase:
                 self._vector_store = VectorStore(self._knowledge_file)
 
     def _save(self) -> None:
+        if database_enabled():
+            save_document(
+                "knowledge",
+                self._owner_id,
+                "records",
+                {
+                    "version": 2,
+                    "updated_at": _timestamp(),
+                    "records": self._vector_store.vectors,
+                },
+            )
+            return
         self._knowledge_file.parent.mkdir(parents=True, exist_ok=True)
         self._vector_store.save(self._knowledge_file)
 

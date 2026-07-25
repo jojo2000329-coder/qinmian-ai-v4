@@ -139,7 +139,7 @@ def _knowledge_base_for(user_id: str | None = None) -> KnowledgeBase:
         knowledge_base = _KNOWLEDGE_BASES.get(owner_id)
         if knowledge_base is None:
             store_path = user_data_path(owner_id) / "knowledge_base" / "records.json"
-            knowledge_base = KnowledgeBase(store_path)
+            knowledge_base = KnowledgeBase(store_path, owner_id=owner_id)
             knowledge_base.index_major_catalog(STORE)
             _KNOWLEDGE_BASES[owner_id] = knowledge_base
         return knowledge_base

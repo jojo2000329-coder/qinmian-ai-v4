@@ -12,6 +12,7 @@ from typing import Any
 
 from .auth_store import user_data_path
 from .data_store import QinmianDataStore
+from .persistence import database_enabled, load_document, save_document
 
 
 class UserRuntimeStoreManager:
@@ -34,7 +35,11 @@ class UserRuntimeStoreManager:
             store = copy.copy(self.base_store)
             state_path = self._state_path(user_id)
             payload: dict[str, Any] = {}
-            if state_path.exists():
+            if database_enabled():
+                loaded = load_document("runtime", user_id, "state", {})
+                if isinstance(loaded, dict):
+                    payload = loaded
+            elif state_path.exists():
                 try:
                     loaded = json.loads(state_path.read_text(encoding="utf-8"))
                     if isinstance(loaded, dict):
@@ -70,6 +75,9 @@ class UserRuntimeStoreManager:
                 "watchers": store.watchers,
                 "events": store.events[-100:],
             }
+            if database_enabled():
+                save_document("runtime", user_id, "state", payload)
+                return
             temp_name = ""
             try:
                 with tempfile.NamedTemporaryFile(

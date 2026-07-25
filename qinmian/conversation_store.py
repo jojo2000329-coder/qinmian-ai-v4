@@ -25,6 +25,13 @@ from pathlib import Path
 from typing import Any
 
 from .auth_store import LEGACY_CONVERSATIONS_DIR, user_data_path
+from .persistence import (
+    database_enabled,
+    delete_document,
+    list_documents,
+    load_document,
+    save_document,
+)
 
 CONVERSATIONS_DIR = LEGACY_CONVERSATIONS_DIR
 _CONVERSATION_ID_RE = re.compile(r"^[a-f0-9]{12}$")
@@ -166,10 +173,22 @@ def _write_conversation(path: Path, payload: dict[str, Any]) -> None:
                 temp_path.unlink()
 
 
+def _save_conversation(payload: dict[str, Any], user_id: str) -> None:
+    conv_id = str(payload.get("id", ""))
+    if not _CONVERSATION_ID_RE.fullmatch(conv_id):
+        raise ValueError("invalid conversation id")
+    if database_enabled():
+        save_document("conversations", user_id, conv_id, payload)
+        return
+    path = _conv_path(conv_id, user_id)
+    if path is None:
+        raise ValueError("invalid conversation path")
+    _write_conversation(path, payload)
+
+
 def create_conversation(title: str = "", user_id: str = "legacy") -> dict[str, Any]:
     """创建新会话，返回会话对象"""
     with _LOCK:
-        directory = _ensure_dir(user_id)
         conv_id = uuid.uuid4().hex[:12]
         now = _timestamp()
         conv = {
@@ -180,7 +199,7 @@ def create_conversation(title: str = "", user_id: str = "legacy") -> dict[str, A
             "message_count": 0,
             "messages": [],
         }
-        _write_conversation(directory / f"{conv_id}.json", conv)
+        _save_conversation(conv, user_id)
         return conv
 
 
@@ -191,6 +210,19 @@ def list_conversations(limit: int = 50, user_id: str = "legacy") -> list[dict[st
         return []
     result = []
     with _LOCK:
+        if database_enabled():
+            documents = list_documents("conversations", user_id, effective_limit)
+            return [
+                {
+                    "id": data.get("id", ""),
+                    "title": data.get("title", "未命名对话"),
+                    "created_at": data.get("created_at", ""),
+                    "updated_at": data.get("updated_at", ""),
+                    "message_count": data.get("message_count", 0),
+                }
+                for data in documents
+                if isinstance(data, dict)
+            ]
         for path in _list_files(user_id):
             try:
                 with path.open("r", encoding="utf-8") as f:
@@ -211,6 +243,11 @@ def list_conversations(limit: int = 50, user_id: str = "legacy") -> list[dict[st
 
 def get_conversation(conv_id: str, user_id: str = "legacy") -> dict[str, Any] | None:
     """获取单条会话完整内容"""
+    if not _CONVERSATION_ID_RE.fullmatch(str(conv_id or "")):
+        return None
+    if database_enabled():
+        payload = load_document("conversations", user_id, conv_id)
+        return payload if isinstance(payload, dict) else None
     path = _conv_path(conv_id, user_id)
     if path is None or not path.exists():
         return None
@@ -224,6 +261,10 @@ def get_conversation(conv_id: str, user_id: str = "legacy") -> dict[str, Any] | 
 
 def delete_conversation(conv_id: str, user_id: str = "legacy") -> bool:
     """删除会话"""
+    if not _CONVERSATION_ID_RE.fullmatch(str(conv_id or "")):
+        return False
+    if database_enabled():
+        return delete_document("conversations", user_id, conv_id)
     path = _conv_path(conv_id, user_id)
     if path is None or not path.exists():
         return False
@@ -240,12 +281,11 @@ def rename_conversation(
     """重命名会话"""
     with _LOCK:
         conv = get_conversation(conv_id, user_id)
-        path = _conv_path(conv_id, user_id)
-        if not conv or path is None:
+        if not conv:
             return None
         conv["title"] = str(new_title)[:80]
         conv["updated_at"] = _timestamp()
-        _write_conversation(path, conv)
+        _save_conversation(conv, user_id)
         return conv
 
 
@@ -257,8 +297,7 @@ def delete_message(
     """删除会话中的单条消息"""
     with _LOCK:
         conv = get_conversation(conv_id, user_id)
-        path = _conv_path(conv_id, user_id)
-        if not conv or path is None:
+        if not conv:
             return None
         messages = conv.get("messages", [])
         if msg_index < 0 or msg_index >= len(messages):
@@ -267,7 +306,7 @@ def delete_message(
         conv["messages"] = messages
         conv["message_count"] = len(messages)
         conv["updated_at"] = _timestamp()
-        _write_conversation(path, conv)
+        _save_conversation(conv, user_id)
         return conv
 
 
@@ -281,8 +320,7 @@ def add_message(
     """向已有会话追加一条消息"""
     with _LOCK:
         conv = get_conversation(conv_id, user_id)
-        path = _conv_path(conv_id, user_id)
-        if not conv or path is None:
+        if not conv:
             return None
         now = _timestamp()
         message = {
@@ -299,7 +337,7 @@ def add_message(
         if conv["message_count"] == 1 and role == "user":
             conv["title"] = _extract_title(str(content))
 
-        _write_conversation(path, conv)
+        _save_conversation(conv, user_id)
         return conv
 
 
