@@ -156,7 +156,6 @@ class LLMClient:
         payload = {
             "model": self.model,
             "messages": messages,
-            "temperature": 0.3,
         }
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(

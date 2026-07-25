@@ -13,14 +13,14 @@ services:
     autoDeploy: true
     envVars:
       - key: QINMIAN_LLM_PROVIDER
-        value: yizhineng-openai
+        value: openai
       - key: QINMIAN_LLM_BASE_URL
-        value: https://yizhinengai.com/v1
+        value: https://api.openai.com/v1
       - key: QINMIAN_LLM_MODEL
         value: gpt-5.6-terra
       - key: QINMIAN_VISION_MODEL
         value: gpt-5.6-terra
-      - key: QINMIAN_LLM_API_KEY
+      - key: OPENAI_API_KEY
         sync: false
       - key: QINMIAN_SECRET_KEY
         generateValue: true

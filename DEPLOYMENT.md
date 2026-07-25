@@ -7,7 +7,7 @@
 ```bash
 docker build -t qinmian-ai-v4 .
 docker run --rm -p 8080:8080 \
-  -e QINMIAN_LLM_API_KEY="你的宜智AI密钥" \
+  -e OPENAI_API_KEY="你的 OpenAI API 密钥" \
   qinmian-ai-v4
 ```
 
@@ -38,7 +38,7 @@ docker run --rm -p 8080:8080 \
 4. 在环境变量中添加：
 
 ```text
-QINMIAN_LLM_API_KEY=你的宜智AI密钥
+OPENAI_API_KEY=你的 OpenAI API 密钥
 QINMIAN_SECRET_KEY=一个足够长的随机字符串
 ```
 
@@ -55,8 +55,8 @@ QINMIAN_SECRET_KEY=一个足够长的随机字符串
 
 | 名称 | 必填 | 默认值 |
 | --- | --- | --- |
-| `QINMIAN_LLM_API_KEY` | 是 | 无 |
-| `QINMIAN_LLM_BASE_URL` | 否 | `https://yizhinengai.com/v1` |
+| `OPENAI_API_KEY` | 是 | 无 |
+| `QINMIAN_LLM_BASE_URL` | 否 | `https://api.openai.com/v1` |
 | `QINMIAN_LLM_MODEL` | 否 | `gpt-5.6-terra` |
 | `QINMIAN_VISION_MODEL` | 否 | `gpt-5.6-terra` |
 | `QINMIAN_SECRET_KEY` | 生产环境必填 | 本地自动生成并写入 `data/.session_secret` |

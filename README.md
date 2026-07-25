@@ -50,9 +50,9 @@ pip install -r requirements.txt
 # 2. （可选）配置大模型 API Key
 # 编辑 data/llm_config.json
 # 或设置环境变量：
-#   export QINMIAN_LLM_API_KEY=sk-xxx
-#   export QINMIAN_LLM_PROVIDER=deepseek
-#   export QINMIAN_LLM_MODEL=deepseek-chat
+#   export OPENAI_API_KEY=sk-xxx
+#   export QINMIAN_LLM_PROVIDER=openai
+#   export QINMIAN_LLM_MODEL=gpt-5.6-terra
 ```
 
 ### 运行

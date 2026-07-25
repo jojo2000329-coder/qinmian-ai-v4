@@ -839,7 +839,6 @@ def _stream_with_agent(
             model=llm_status.get("model", "gpt-4o-mini"),
             openai_api_key=AGENT.llm.api_key,
             openai_api_base=AGENT.llm.base_url,
-            temperature=0.3,
             streaming=True,
         )
 
