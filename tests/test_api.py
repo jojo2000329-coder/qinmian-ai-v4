@@ -373,6 +373,42 @@ class TestPost:
         assert data["data"]["credit_rule"]["student_type"] == "international"
         assert "境外生" in data["answer"]
 
+    def test_clinical_medicine_followups_use_ten_semester_context(self, client):
+        resp = client.post(
+            "/api/chat",
+            json={
+                "message": "临床医学第1-8学期精排优化",
+                "context": {},
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["intent"] == "curriculum"
+        assert data["data"]["major"]["name"] == "临床医学"
+        suggestions = " ".join(data["suggestions"])
+        assert "临床医学" in suggestions
+        assert "第9-10学期" in suggestions
+        assert "4年课表" not in suggestions
+
+    def test_clinical_medicine_plain_question_uses_five_year_program(self, client):
+        resp = client.post(
+            "/api/chat",
+            json={"message": "临床医学", "context": {}},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["data"]["program_years"] == 5
+        assert data["data"]["semester_count"] == 10
+        assert "学制：5年制（共10个学期）" in data["answer"]
+        assert "四年制" not in data["answer"]
+        assert any("五年10学期" in item for item in data["suggestions"])
+
+    def test_pharmacy_is_not_misclassified_as_five_year_program(self, client):
+        major = next(row for row in client.get("/api/majors").get_json() if row["name"] == "药学")
+        data = client.get(f"/api/curriculum/{major['id']}").get_json()
+        assert data["program_years"] == 4
+        assert data["semester_count"] == 8
+
     def test_chat_hardness(self, client):
         resp = client.post(
             "/api/course/analyze",
@@ -391,6 +427,36 @@ class TestPost:
             content_type="application/json",
         )
         assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["selected_major_fit"]["level"]
+        assert 0 <= data["selected_major_fit"]["score"] <= 100
+        assert data["salary_range"]
+        assert data["planning_note"]
+        assert all(len(semester["courses"]) >= 5 for semester in data["semesters"])
+
+    def test_plan_evaluates_every_major_and_enriches_each_semester(self, client):
+        majors = client.get("/api/majors").get_json()
+        assert len(majors) >= 60
+        for major in majors:
+            resp = client.post(
+                "/api/plan",
+                json={"career": "算法工程师", "major_id": major["id"]},
+            )
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data["selected_major"]["id"] == major["id"]
+            assert data["selected_major_fit"]["level"] in {
+                "高度匹配",
+                "比较匹配",
+                "可迁移发展",
+                "专业跨度较大",
+            }
+            assert all(len(semester["courses"]) >= 5 for semester in data["semesters"])
+            assert any(
+                course["origin"] == "career"
+                for semester in data["semesters"]
+                for course in semester["courses"]
+            )
 
     def test_professors_match(self, client):
         resp = client.post(
@@ -399,6 +465,71 @@ class TestPost:
             content_type="application/json",
         )
         assert resp.status_code == 200
+
+    def test_conflict_resolver_validates_deduplicates_and_builds_applicable_change(self, client):
+        major = client.get("/api/majors").get_json()[0]
+        courses = [
+            {"name": "数据结构", "day": "周一", "start": "08:00", "end": "09:40", "category": "专业必修"},
+            {"name": "机器学习", "day": "星期一", "start": "08:30", "end": "10:00", "category": "专业选修"},
+            {"name": "机器学习", "day": "星期一", "start": "08:30", "end": "10:00", "category": "专业选修"},
+            {"name": "无效课程", "day": "周二", "start": "12:00", "end": "11:00", "category": "专业选修"},
+        ]
+        resp = client.post(
+            "/api/conflicts",
+            json={"major_id": major["id"], "selected_courses": courses},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["status"] == "conflict"
+        assert data["course_count"] == 2
+        assert len(data["duplicate_entries"]) == 1
+        assert len(data["invalid_entries"]) == 1
+        assert data["conflicts"][0]["overlap_minutes"] == 70
+        assert data["recommended_changes"][0]["action"] == "reschedule"
+
+    @pytest.mark.parametrize(
+        ("export_format", "signature"),
+        [
+            ("docx", b"PK"),
+            ("pdf", b"%PDF"),
+            ("xls", b"\xd0\xcf\x11\xe0"),
+        ],
+    )
+    def test_conversation_export_formats(self, client, export_format, signature):
+        resp = client.post(
+            "/api/exports",
+            json={
+                "kind": "conversation",
+                "format": export_format,
+                "title": "临床医学五年规划",
+                "data": {
+                    "messages": [
+                        {"role": "user", "content": "临床医学五年如何安排？"},
+                        {"role": "assistant", "content": "按10个学期规划。"},
+                    ]
+                },
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.data.startswith(signature)
+        assert "attachment" in resp.headers["Content-Disposition"]
+
+    def test_career_plan_docx_export(self, client):
+        plan = client.post(
+            "/api/plan",
+            json={"career": "临床医生", "major_id": "hqu-2026-qz-med-clinical"},
+        ).get_json()
+        resp = client.post(
+            "/api/exports",
+            json={
+                "kind": "career_plan",
+                "format": "docx",
+                "title": "临床医学五年课表",
+                "data": plan,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.data.startswith(b"PK")
 
     def test_not_found(self, client):
         resp = client.get("/api/nonexistent")

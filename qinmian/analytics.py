@@ -465,35 +465,155 @@ def time_to_minutes(value: str) -> int:
 
 
 class ConflictResolver:
+    DAYS = ["周一", "周二", "周三", "周四", "周五"]
+    STANDARD_SLOTS = [
+        ("08:00", "09:40"),
+        ("10:00", "11:40"),
+        ("14:30", "16:10"),
+        ("16:20", "18:00"),
+        ("19:00", "20:40"),
+    ]
+
     def __init__(self, store: QinmianDataStore) -> None:
         self.store = store
 
     def resolve(self, major_id: str, selected_courses: list[dict[str, Any]]) -> dict[str, Any]:
         curriculum = self.store.curriculum_for(major_id)
+        normalized, invalid_entries, duplicate_entries = self._normalize_courses(selected_courses)
         conflicts = []
-        for i, left in enumerate(selected_courses):
-            for right in selected_courses[i + 1 :]:
+        for i, left in enumerate(normalized):
+            for right in normalized[i + 1 :]:
                 if self._conflicts(left, right):
-                    conflicts.append({"left": left, "right": right, "reason": "上课时间重叠"})
-        alternatives = self._alternatives(curriculum["courses"], selected_courses)
+                    overlap = min(time_to_minutes(left["end"]), time_to_minutes(right["end"])) - max(
+                        time_to_minutes(left["start"]), time_to_minutes(right["start"])
+                    )
+                    conflicts.append(
+                        {
+                            "left": left,
+                            "right": right,
+                            "reason": f"上课时间重叠 {overlap} 分钟",
+                            "overlap_minutes": overlap,
+                        }
+                    )
+        alternatives = self._alternatives(curriculum["courses"], normalized)
+        recommended_changes: list[dict[str, Any]] = []
+        changed_courses: set[tuple[str, str, str]] = set()
+        for conflict in conflicts:
+            left = conflict["left"]
+            right = conflict["right"]
+            movable = right
+            if "必修" in right.get("category", "") and "必修" not in left.get("category", ""):
+                movable = left
+            change_key = (movable.get("name", ""), movable.get("day", ""), movable.get("start", ""))
+            if change_key in changed_courses:
+                continue
+            change = self._find_reschedule(movable, normalized)
+            if change:
+                recommended_changes.append(change)
+                changed_courses.add(change_key)
+
+        name_counts = Counter(course.get("name", "") for course in normalized if course.get("name"))
+        duplicate_courses = sorted(name for name, count in name_counts.items() if count > 1)
         plans = [
             {
-                "name": "方案A：保必修，换选修",
-                "strategy": "保留所有专业必修课，把冲突的专业选修替换成同方向课程。",
-                "changes": alternatives[:3],
+                "name": "方案A：自动错峰（推荐）",
+                "strategy": (
+                    "优先保留必修课，并把可移动课程安排到当前课表中的空闲时段。"
+                    if recommended_changes
+                    else "当前没有可自动调整的冲突时段。"
+                ),
+                "changes": recommended_changes,
             },
             {
                 "name": "方案B：压低本学期负荷",
                 "strategy": "保留关键前置课，把非前置课程顺延到下一学期。",
-                "changes": [{"action": "defer", "course": c.get("name"), "to_semester": c.get("semester", 1) + 1} for c in selected_courses[-2:]],
+                "changes": [
+                    {
+                        "action": "defer",
+                        "course": course.get("name"),
+                        "from_semester": course.get("semester", 1),
+                        "to_semester": int(course.get("semester", 1)) + 1,
+                    }
+                    for course in normalized
+                    if "必修" not in course.get("category", "")
+                ][:2],
             },
             {
-                "name": "方案C：职业优先",
-                "strategy": "优先保留与目标岗位关联更强的课程，再用通识或实践课补齐学分。",
-                "changes": alternatives[3:6],
+                "name": "方案C：同类别替代",
+                "strategy": "若无法换时段，使用同类别、相近学分课程替代冲突选修课。",
+                "changes": alternatives[:3],
             },
         ]
-        return {"conflicts": conflicts, "alternatives": alternatives, "plans": plans}
+        return {
+            "status": "conflict" if conflicts else "ok",
+            "summary": (
+                f"发现 {len(conflicts)} 组时间冲突，已生成 {len(recommended_changes)} 项可应用调整。"
+                if conflicts
+                else "未发现时间冲突。"
+            ),
+            "input_count": len(selected_courses),
+            "course_count": len(normalized),
+            "normalized_courses": normalized,
+            "invalid_entries": invalid_entries,
+            "duplicate_entries": duplicate_entries,
+            "duplicate_courses": duplicate_courses,
+            "conflicts": conflicts,
+            "alternatives": alternatives,
+            "recommended_changes": recommended_changes,
+            "plans": plans,
+        }
+
+    def _normalize_courses(
+        self,
+        selected_courses: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        normalized: list[dict[str, Any]] = []
+        invalid: list[dict[str, Any]] = []
+        duplicates: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str, str]] = set()
+        day_aliases = {
+            "1": "周一", "星期一": "周一", "周一": "周一",
+            "2": "周二", "星期二": "周二", "周二": "周二",
+            "3": "周三", "星期三": "周三", "周三": "周三",
+            "4": "周四", "星期四": "周四", "周四": "周四",
+            "5": "周五", "星期五": "周五", "周五": "周五",
+        }
+        for index, raw in enumerate(selected_courses):
+            name = re.sub(r"\s+", " ", str(raw.get("name", "")).strip())
+            day = day_aliases.get(str(raw.get("day", "")).strip(), "")
+            start = str(raw.get("start", "")).strip()
+            end = str(raw.get("end", "")).strip()
+            errors = []
+            if not name:
+                errors.append("课程名为空")
+            if not day:
+                errors.append("星期无效")
+            try:
+                start_minutes = time_to_minutes(start)
+                end_minutes = time_to_minutes(end)
+                if end_minutes <= start_minutes:
+                    errors.append("结束时间必须晚于开始时间")
+            except Exception:
+                errors.append("时间格式无效")
+            if errors:
+                invalid.append({"index": index, "name": name or f"第{index + 1}条", "errors": errors})
+                continue
+            item = {
+                **raw,
+                "name": name,
+                "day": day,
+                "start": start,
+                "end": end,
+                "category": str(raw.get("category", "未分类")).strip() or "未分类",
+                "semester": int(raw.get("semester") or 1),
+            }
+            identity = (name.casefold(), day, start, end)
+            if identity in seen:
+                duplicates.append({"index": index, "course": item, "reason": "同一课程和时段重复录入"})
+                continue
+            seen.add(identity)
+            normalized.append(item)
+        return normalized, invalid, duplicates
 
     def _conflicts(self, left: dict[str, Any], right: dict[str, Any]) -> bool:
         if left.get("day") != right.get("day"):
@@ -507,14 +627,42 @@ class ConflictResolver:
             return False
         return max(left_start, right_start) < min(left_end, right_end)
 
+    def _find_reschedule(
+        self,
+        course: dict[str, Any],
+        selected_courses: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        other_courses = [row for row in selected_courses if row is not course]
+        for day in self.DAYS:
+            for start, end in self.STANDARD_SLOTS:
+                candidate = {**course, "day": day, "start": start, "end": end}
+                if all(not self._conflicts(candidate, other) for other in other_courses):
+                    return {
+                        "action": "reschedule",
+                        "course": course.get("name", ""),
+                        "from": {
+                            "day": course.get("day", ""),
+                            "start": course.get("start", ""),
+                            "end": course.get("end", ""),
+                        },
+                        "to": {"day": day, "start": start, "end": end},
+                        "reason": "避开现有课程并优先保留必修课",
+                    }
+        return None
+
     def _alternatives(self, courses: list[dict[str, Any]], selected: list[dict[str, Any]]) -> list[dict[str, Any]]:
         selected_names = {c.get("name") for c in selected}
         rows = []
+        seen: set[tuple[str, int]] = set()
         for course in courses:
             if course["name"] in selected_names:
                 continue
             if course["category"] not in {"专业选修", "通识选修", "实践与创新"}:
                 continue
+            key = (course["name"], int(course.get("semester") or 0))
+            if key in seen:
+                continue
+            seen.add(key)
             candidate = {
                 "name": course["name"],
                 "category": course["category"],

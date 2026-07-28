@@ -22,6 +22,7 @@ const state = {
   selectedMajor: null,
   curriculum: null,
   hot: null,
+  careerPlan: null,
   teacherRoster: null,
   teacherRosterFilters: { college: "", q: "", scheduled: "" },
   facultyProfiles: null,
@@ -35,8 +36,8 @@ const state = {
   chat: [
     {
       role: "assistant",
-      text: "我是勤勉。你可以问我：算法工程师怎么排四年课表？机器学习硬核吗？人工智能毕业学分是多少？",
-      suggestions: ["推荐热门5个专业方向", "算法工程师4年课表", "机器学习硬核吗"],
+      text: "我是勤勉。你可以问我：算法工程师怎么规划完整学习路线？机器学习硬核吗？人工智能毕业学分是多少？",
+      suggestions: ["推荐热门5个专业方向", "算法工程师完整学习路线", "机器学习硬核吗"],
     },
   ],
 
@@ -326,6 +327,236 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function renderInlineMarkdown(value) {
+  let text = escapeHtml(value);
+  const safeTokens = [];
+  const stash = (html) => {
+    const index = safeTokens.push(html) - 1;
+    return `\uE000${index}\uE001`;
+  };
+
+  text = text.replace(/`([^`\n]+)`/g, (_, code) => stash(`<code>${code}</code>`));
+  text = text.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+    (_, label, url) => stash(`<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`),
+  );
+  text = text.replace(
+    /(^|[\s（(])(https?:\/\/[^\s<）)，。！？；;]+)/g,
+    (_, prefix, url) => `${prefix}${stash(`<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`)}`,
+  );
+  text = text
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_\n]+)__/g, "<strong>$1</strong>")
+    .replace(/~~([^~\n]+)~~/g, "<del>$1</del>");
+  return text.replace(/\uE000(\d+)\uE001/g, (_, index) => safeTokens[Number(index)] || "");
+}
+
+function markdownTableCells(line) {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
+function isMarkdownTableSeparator(line) {
+  const cells = markdownTableCells(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s/g, "")));
+}
+
+function renderMarkdownSafe(value) {
+  const lines = String(value ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const output = [];
+  let paragraph = [];
+  let listType = "";
+  let inCodeBlock = false;
+  let codeLines = [];
+
+  const closeList = () => {
+    if (!listType) return;
+    output.push(`</${listType}>`);
+    listType = "";
+  };
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    output.push(`<p>${paragraph.map(renderInlineMarkdown).join("<br>")}</p>`);
+    paragraph = [];
+  };
+  const beforeBlock = () => {
+    flushParagraph();
+    closeList();
+  };
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    const trimmed = line.trim();
+
+    if (/^```/.test(trimmed)) {
+      if (inCodeBlock) {
+        output.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        codeLines = [];
+        inCodeBlock = false;
+      } else {
+        beforeBlock();
+        inCodeBlock = true;
+      }
+      continue;
+    }
+    if (inCodeBlock) {
+      codeLines.push(line);
+      continue;
+    }
+    if (!trimmed) {
+      beforeBlock();
+      continue;
+    }
+
+    const nextLine = lines[index + 1] || "";
+    if (trimmed.includes("|") && isMarkdownTableSeparator(nextLine)) {
+      beforeBlock();
+      const headers = markdownTableCells(trimmed);
+      const bodyRows = [];
+      index += 2;
+      while (index < lines.length && lines[index].includes("|") && lines[index].trim()) {
+        bodyRows.push(markdownTableCells(lines[index]));
+        index++;
+      }
+      index--;
+      output.push(
+        `<div class="ai-md-table-wrap"><table class="ai-md-table"><thead><tr>${headers
+          .map((cell) => `<th>${renderInlineMarkdown(cell)}</th>`)
+          .join("")}</tr></thead><tbody>${bodyRows
+          .map(
+            (row) =>
+              `<tr>${headers
+                .map((_, cellIndex) => `<td>${renderInlineMarkdown(row[cellIndex] || "")}</td>`)
+                .join("")}</tr>`,
+          )
+          .join("")}</tbody></table></div>`,
+      );
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      beforeBlock();
+      const level = Math.min(4, heading[1].length + 1);
+      output.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+    if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      beforeBlock();
+      output.push("<hr>");
+      continue;
+    }
+    const quote = trimmed.match(/^>\s?(.*)$/);
+    if (quote) {
+      beforeBlock();
+      output.push(`<blockquote>${renderInlineMarkdown(quote[1])}</blockquote>`);
+      continue;
+    }
+    const unordered = trimmed.match(/^[-*+]\s+(.+)$/);
+    const ordered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+    if (unordered || ordered) {
+      flushParagraph();
+      const wantedType = unordered ? "ul" : "ol";
+      if (listType !== wantedType) {
+        closeList();
+        output.push(`<${wantedType}>`);
+        listType = wantedType;
+      }
+      output.push(`<li>${renderInlineMarkdown((unordered || ordered)[1])}</li>`);
+      continue;
+    }
+
+    closeList();
+    paragraph.push(line);
+  }
+
+  if (inCodeBlock) output.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+  flushParagraph();
+  closeList();
+  return `<div class="ai-md-content">${output.join("")}</div>`;
+}
+
+function showToast(message, type = "success") {
+  const toast = $("#appToast");
+  if (!toast) return;
+  toast.textContent = message;
+  toast.className = `app-toast ${type}`;
+  toast.hidden = false;
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => {
+    toast.classList.add("leaving");
+    setTimeout(() => {
+      toast.hidden = true;
+      toast.classList.remove("leaving");
+    }, 220);
+  }, 2600);
+}
+
+function safeFilename(value, fallback = "勤勉导出") {
+  const cleaned = String(value || "")
+    .replace(/[\\/:*?"<>|]+/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.slice(0, 60) || fallback;
+}
+
+function downloadText(filename, text, mimeType = "text/plain;charset=utf-8") {
+  const blob = new Blob(["\ufeff", text], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+async function downloadServerExport({ kind, format, title, data, fallbackFilename }) {
+  const response = await fetch("/api/exports", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, format, title, data }),
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error || `导出失败（HTTP ${response.status}）`);
+  }
+  const blob = await response.blob();
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+  let filename = fallbackFilename;
+  try {
+    filename = utf8Match
+      ? decodeURIComponent(utf8Match[1])
+      : plainMatch
+        ? plainMatch[1]
+        : fallbackFilename;
+  } catch (_) {}
+  downloadBlob(filename, blob);
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
 function optionList(values, label) {
   return [
     `<option value="">${label}</option>`,
@@ -355,9 +586,11 @@ function setAuthMode(mode) {
   });
   $("#authConfirmRow").hidden = !isRegister;
   $("#authPasswordConfirm").required = isRegister;
+  if (!isRegister) $("#authPasswordConfirm").value = "";
   $("#authPassword").autocomplete = isRegister ? "new-password" : "current-password";
   $("#authSubmit").textContent = isRegister ? "创建账号" : "登录";
   $("#authForm").dataset.mode = mode;
+  $("#authError").classList.remove("success");
   $("#authError").textContent = "";
 }
 
@@ -374,18 +607,22 @@ function initAuthPage() {
     const submit = $("#authSubmit");
     const errorLine = $("#authError");
     submit.disabled = true;
+    errorLine.classList.remove("success");
     errorLine.textContent = "";
     try {
+      const payload = { username, password };
+      if (mode === "register") payload.password_confirm = passwordConfirm;
       await api(`/api/auth/${mode}`, {
         method: "POST",
-        body: JSON.stringify({
-          username,
-          password,
-          password_confirm: passwordConfirm,
-        }),
+        body: JSON.stringify(payload),
       });
+      errorLine.classList.add("success");
+      errorLine.textContent = mode === "register" ? "注册成功，已为你自动登录。" : "登录成功，正在进入勤勉 AI…";
+      submit.textContent = mode === "register" ? "注册成功" : "登录成功";
+      await new Promise((resolve) => setTimeout(resolve, 700));
       window.location.reload();
     } catch (error) {
+      errorLine.classList.remove("success");
       errorLine.textContent = error.message;
       submit.disabled = false;
     }
@@ -740,19 +977,31 @@ function courseList(courses) {
 
 function renderCareer() {
   $("#tabBody").innerHTML = `
-    <section class="panel"><h2>未来职业画像反推 4 年课表</h2><div class="actions">
+    <section class="panel"><h2>未来职业画像与专业适配课表</h2><div class="actions">
       <label><span>理想岗位</span><input id="careerInput" value="算法工程师" /></label>
       <button class="primary" id="careerBtn">生成课表</button>
+      <div class="export-control">
+        <select id="careerExportFormat" class="export-format">
+          <option value="csv">CSV</option>
+          <option value="docx">DOCX</option>
+          <option value="pdf">PDF</option>
+          <option value="xls">XLS</option>
+        </select>
+        <button id="careerExportBtn" disabled>⇩ 导出课表</button>
+      </div>
     </div></section>
     <section class="panel" id="careerResult"><div class="empty-state">输入岗位后生成路线。</div></section>`;
   $("#careerBtn").addEventListener("click", generateCareerPlan);
+  $("#careerExportBtn").addEventListener("click", exportCareerPlan);
   generateCareerPlan();
 }
 
 async function generateCareerPlan() {
   const career = $("#careerInput").value.trim() || "算法工程师";
   const data = await api("/api/plan", { method: "POST", body: JSON.stringify({ career, major_id: state.selectedMajor.id }) });
+  state.careerPlan = data;
   $("#careerResult").innerHTML = renderTimetableFromPlan(data);
+  $("#careerExportBtn").disabled = false;
 }
 
 function renderTimetableFromPlan(data) {
@@ -765,6 +1014,23 @@ function renderTimetableFromPlan(data) {
   html += `<span class="career-overview-item">📚 ${data.semester_count} 学期路线</span>`;
   if (salary) html += `<span class="career-overview-item">💰 薪资参考：<strong>${salary}</strong></span>`;
   html += `</div>`;
+  const fit = data.selected_major_fit || {};
+  const fitScore = Number(fit.score || 0);
+  const fitTone = fitScore >= 75 ? "high" : fitScore >= 50 ? "medium" : fitScore >= 30 ? "transfer" : "low";
+  html += `<section class="career-fit-card ${fitTone}">
+    <div class="career-fit-heading">
+      <strong>职业—专业匹配判断</strong>
+      <span class="career-fit-score">${fitScore}% · ${escapeHtml(fit.level || "待评估")}</span>
+    </div>
+    <p>${escapeHtml(fit.reason || "正在根据专业培养方案评估。")}</p>
+    ${fit.missing_core_courses?.length ? `<div class="career-fit-gap"><strong>建议补齐：</strong>${fit.missing_core_courses.map(escapeHtml).join("、")}</div>` : ""}
+  </section>`;
+  if (data.recommended_majors?.length) {
+    html += `<div class="career-recommended"><strong>更匹配的专业参考：</strong>${data.recommended_majors.slice(0, 5).map((row) => {
+      const percent = Math.round(Number(row.score || 0) * 100);
+      return `<span>${escapeHtml(row.major?.display_name || "")} ${percent}%</span>`;
+    }).join("")}</div>`;
+  }
   html += `<div class="semester-tabs" id="semesterTabs">`;
   for (let i = 0; i < data.semesters.length; i++) {
     const sem = data.semesters[i];
@@ -776,21 +1042,22 @@ function renderTimetableFromPlan(data) {
     html += renderSingleSemesterView(data.semesters[0]);
   }
   html += `</div>`;
-  html += `<div style="padding:10px 14px">`;
+  html += `<div class="career-plan-details">`;
   if (data.must_courses && data.must_courses.length > 0) {
-    html += `<div style="font-size:11px;color:#94a3b8;margin-bottom:6px">核心课程：`;
+    html += `<div class="career-core-courses"><strong>核心课程：</strong>`;
     for (const n of data.must_courses) {
-      html += `<span style="display:inline-block;padding:1px 8px;border-radius:8px;font-size:10px;background:rgba(14,165,233,0.06);color:#64748b;border:1px solid rgba(14,165,233,0.1);margin:2px">${escapeHtml(n)}</span>`;
+      html += `<span>${escapeHtml(n)}</span>`;
     }
     html += `</div>`;
   }
   if (data.milestones && data.milestones.length > 0) {
-    html += `<div style="font-size:12px;color:#94a3b8;margin-top:6px">📌 路线建议：`;
+    html += `<div class="career-milestones"><strong>📌 路线建议：</strong>`;
     for (const m of data.milestones) {
-      html += `<div style="padding:2px 0;color:#64748b;font-size:11px">· ${escapeHtml(m)}</div>`;
+      html += `<div>· ${escapeHtml(m)}</div>`;
     }
     html += `</div>`;
   }
+  if (data.planning_note) html += `<p class="career-planning-note">说明：${escapeHtml(data.planning_note)}</p>`;
   html += `</div>`;
   setTimeout(() => {
     const tabs = document.querySelectorAll("#semesterTabs .semester-tab");
@@ -811,7 +1078,10 @@ function renderSingleSemesterView(sem) {
   const days = ["周一", "周二", "周三", "周四", "周五"];
   const timeslots = ["08:00-09:40", "10:00-11:40", "14:30-16:10", "16:20-18:00", "19:00-20:40"];
   let html = `<div class="timetable-container">`;
-  html += `<div class="timetable-header"><h3>📅 ${escapeHtml(sem.label)}</h3><span class="credits-badge">${sem.credits} 学分 · ${escapeHtml(sem.focus || "")}</span></div>`;
+  const composition = sem.suggested_course_count
+    ? ` · ${sem.official_course_count || 0} 门培养方案课程 + ${sem.suggested_course_count} 项规划建议`
+    : "";
+  html += `<div class="timetable-header"><h3>📅 ${escapeHtml(sem.label)}</h3><span class="credits-badge">${sem.credits} 学分${composition} · ${escapeHtml(sem.focus || "")}</span></div>`;
   html += `<div class="timetable-week-grid">`;
   html += `<div class="timetable-day-header">时间</div>`;
   for (const d of days) html += `<div class="timetable-day-header">${d}</div>`;
@@ -837,10 +1107,12 @@ function renderSingleSemesterView(sem) {
         const cat = c.category || "";
         let typeClass = "type-required";
         let badgeCls = "badge-required";
-        if (cat.includes("选修") || c.origin === "elective") { typeClass = "type-elective"; badgeCls = "badge-elective"; }
+        if (c.origin === "career") { typeClass = "type-career"; badgeCls = "badge-career"; }
+        else if (cat.includes("选修") || c.origin === "elective") { typeClass = "type-elective"; badgeCls = "badge-elective"; }
         else if (cat.includes("通识") || c.origin === "general_elective") { typeClass = "type-general"; badgeCls = "badge-general"; }
-        else if (cat.includes("实践") || c.origin === "career") { typeClass = "type-practice"; badgeCls = "badge-practice"; }
-        html += `<div class="course-card ${typeClass}"><span class="course-name">${escapeHtml(c.name)}</span>`;
+        else if (cat.includes("实践")) { typeClass = "type-practice"; badgeCls = "badge-practice"; }
+        const note = c.planning_note ? ` title="${escapeHtml(c.planning_note)}"` : "";
+        html += `<div class="course-card ${typeClass}"${note}><span class="course-name">${escapeHtml(c.name)}</span>`;
         html += `<span class="course-category ${badgeCls}">${escapeHtml(cat || "")}</span>`;
         html += `</div>`;
       }
@@ -850,13 +1122,64 @@ function renderSingleSemesterView(sem) {
   }
   html += `</div></div>`;
   if (cats.length > 0) {
-    html += `<div style="padding:8px 14px 10px;display:flex;gap:4px;flex-wrap:wrap">`;
+    html += `<div class="semester-course-summary">`;
     for (const c of cats) {
-      html += `<span style="padding:2px 8px;border-radius:6px;font-size:10px;background:rgba(14,165,233,0.06);color:#64748b;border:1px solid rgba(14,165,233,0.1)">${escapeHtml(c.name)}<span style="opacity:0.6;margin-left:2px">${c.credits}学分</span></span>`;
+      html += `<span class="${c.origin === "career" ? "suggested" : ""}">${escapeHtml(c.name)}<small>${c.origin === "career" ? "规划建议" : `${c.credits}学分`}</small></span>`;
     }
     html += `</div>`;
   }
   return html;
+}
+
+async function exportCareerPlan() {
+  const data = state.careerPlan;
+  if (!data?.semesters?.length) {
+    showToast("请先生成职业课表。", "error");
+    return;
+  }
+  const format = $("#careerExportFormat")?.value || "csv";
+  const rows = [
+    ["目标岗位", "当前专业", "匹配度", "匹配结论", "学期", "课程/建议", "类别", "学分", "来源", "说明"],
+  ];
+  for (const semester of data.semesters) {
+    for (const course of semester.courses || []) {
+      rows.push([
+        data.matched_role || data.career || "",
+        data.selected_major?.display_name || "",
+        `${data.selected_major_fit?.score || 0}%`,
+        data.selected_major_fit?.level || "",
+        semester.label,
+        course.name || "",
+        course.category || "",
+        course.credits ?? 0,
+        course.origin === "career" ? "职业规划建议" : "培养方案",
+        course.planning_note || "",
+      ]);
+    }
+  }
+  const title = `${safeFilename(data.selected_major?.display_name)}_${safeFilename(data.matched_role)}`;
+  if (format === "csv") {
+    const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
+    downloadText(`${title}_职业课表.csv`, csv, "text/csv;charset=utf-8");
+    showToast("课表已导出为 CSV，可用 Excel 打开。");
+    return;
+  }
+  const button = $("#careerExportBtn");
+  button.disabled = true;
+  try {
+    await downloadServerExport({
+      kind: "career_plan",
+      format,
+      title,
+      data,
+      fallbackFilename: `${title}_职业课表.${format}`,
+    });
+    showToast(`课表已导出为 ${format.toUpperCase()}。`);
+  } catch (error) {
+    showToast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
 }
 
 // ── 学分体检 ──────────────────────────────────────────────────────
@@ -1056,9 +1379,15 @@ function renderConflict() {
       el.addEventListener("click", () => {
         const name = el.dataset.name;
         if (state.conflictCourses.find(c => c.name === name)) return;
-        const dayNum = Math.floor(Math.random() * 5) + 1;
-        const startHour = 8 + Math.floor(Math.random() * 12);
-        state.conflictCourses.push({ name, dayNum, startTime: `${String(startHour).padStart(2,"0")}:00`, endTime: `${String(startHour+1).padStart(2,"0")}:40`, category: "专业选修" });
+        const slots = [
+          [1, "08:00", "09:40"], [1, "10:00", "11:40"],
+          [2, "08:00", "09:40"], [2, "10:00", "11:40"],
+          [3, "14:30", "16:10"], [4, "14:30", "16:10"],
+          [5, "16:20", "18:00"],
+        ];
+        const used = new Set(state.conflictCourses.map(c => `${c.dayNum}-${c.startTime}-${c.endTime}`));
+        const slot = slots.find(([day, start, end]) => !used.has(`${day}-${start}-${end}`)) || slots[0];
+        state.conflictCourses.push({ name, dayNum: slot[0], startTime: slot[1], endTime: slot[2], category: "专业选修" });
         renderConflict();
       });
     });
@@ -1074,7 +1403,7 @@ function renderConflictCourseInputs() {
   for (let i = 0; i < (state.conflictCourses || []).length; i++) {
     const c = state.conflictCourses[i];
     html += `<div class="conflict-input-course">
-      <span style="font-weight:600;color:#e2e8f0;min-width:60px">${escapeHtml(c.name)}</span>
+      <span style="font-weight:600;color:#0f172a;min-width:60px">${escapeHtml(c.name)}</span>
       <select onchange="state.conflictCourses[${i}].dayNum=parseInt(this.value);">
         ${days.map((d, idx) => `<option value="${idx+1}"${c.dayNum === idx+1 ? " selected" : ""}>${d}</option>`).join("")}
       </select>
@@ -1102,7 +1431,9 @@ async function runConflict() {
     semester: c.semester || 3
   }));
   const data = await api("/api/conflicts", { method: "POST", body: JSON.stringify({ major_id: state.selectedMajor.id, selected_courses: courses }) });
-  $("#conflictResult").innerHTML = renderConflictResult(data, courses);
+  state.lastConflictChanges = data.recommended_changes || [];
+  $("#conflictResult").innerHTML = renderConflictResult(data, data.normalized_courses || courses);
+  $("#applyConflictChanges")?.addEventListener("click", applyConflictChanges);
 }
 
 function renderConflictResult(data, courses) {
@@ -1114,7 +1445,25 @@ function renderConflictResult(data, courses) {
     conflictSet.add(c.left.name);
     conflictSet.add(c.right.name);
   }
-  let html = `<div class="timetable-container"><div class="timetable-header"><h3>📅 课表冲突检测</h3><span class="credits-badge">${courses.length} 门课 · ${data.conflicts.length} 组冲突</span></div>`;
+  let html = `<div class="timetable-container"><div class="timetable-header"><h3>📅 课表冲突检测</h3><span class="credits-badge">${courses.length} 门有效课程 · ${data.conflicts.length} 组冲突</span></div>`;
+  html += `<div class="conflict-audit-summary ${data.conflicts?.length ? "has-conflict" : "is-clear"}">
+    <strong>${escapeHtml(data.summary || "")}</strong>
+    <span>原始 ${Number(data.input_count ?? courses.length)} 条</span>
+    <span>去重后 ${Number(data.course_count ?? courses.length)} 条</span>
+  </div>`;
+  if (data.invalid_entries?.length || data.duplicate_entries?.length || data.duplicate_courses?.length) {
+    html += `<div class="conflict-data-warnings">`;
+    for (const item of data.invalid_entries || []) {
+      html += `<div>⚠ ${escapeHtml(item.name)}：${(item.errors || []).map(escapeHtml).join("、")}</div>`;
+    }
+    if (data.duplicate_entries?.length) {
+      html += `<div>🧹 已忽略 ${data.duplicate_entries.length} 条完全重复的课程记录。</div>`;
+    }
+    if (data.duplicate_courses?.length) {
+      html += `<div>🔎 同名课程出现多个时段，请确认是否误选多个教学班：${data.duplicate_courses.map(escapeHtml).join("、")}</div>`;
+    }
+    html += `</div>`;
+  }
   html += `<div class="conflict-week-grid">`;
   html += `<div class="timetable-day-header">时间</div>`;
   for (const d of days) html += `<div class="timetable-day-header">${d}</div>`;
@@ -1142,7 +1491,7 @@ function renderConflictResult(data, courses) {
   if (data.conflicts && data.conflicts.length > 0) {
     html += `<div style="padding:10px 14px"><h4 style="color:#ef4444;font-size:13px;margin:0 0 8px">冲突详情</h4>`;
     for (const c of data.conflicts) {
-      html += `<div style="font-size:12px;color:#e2e8f0;padding:4px 0;border-bottom:1px solid rgba(255,255,255,0.05)">`;
+      html += `<div style="font-size:12px;color:#334155;padding:6px 0;border-bottom:1px solid rgba(148,163,184,0.18)">`;
       html += `<span style="color:#f87171">${escapeHtml(c.left.name)}</span> 与 <span style="color:#f87171">${escapeHtml(c.right.name)}</span>：${escapeHtml(c.reason)}`;
       html += `</div>`;
     }
@@ -1159,11 +1508,53 @@ function renderConflictResult(data, courses) {
   if (data.plans && data.plans.length > 0) {
     html += `<div style="padding:0 14px 10px"><h4 style="color:#0ea5e9;font-size:13px;margin:8px 0">调整方案</h4>`;
     for (const plan of data.plans) {
-      html += `<div style="font-size:12px;color:#94a3b8;padding:3px 0"><span style="color:#e2e8f0">${escapeHtml(plan.name)}</span>：${escapeHtml(plan.strategy)}</div>`;
+      html += `<div class="conflict-plan"><strong>${escapeHtml(plan.name)}</strong><span>${escapeHtml(plan.strategy)}</span>`;
+      if (plan.changes?.length) {
+        html += `<small>${plan.changes.map((change) => {
+          if (change.action === "reschedule") {
+            return `${escapeHtml(change.course)}：${escapeHtml(change.from?.day)} ${escapeHtml(change.from?.start)} → ${escapeHtml(change.to?.day)} ${escapeHtml(change.to?.start)}`;
+          }
+          if (change.action === "defer") {
+            return `${escapeHtml(change.course)}：顺延至第${Number(change.to_semester)}学期`;
+          }
+          return `替代为 ${escapeHtml(change.name || change.course || "")}`;
+        }).join("<br>")}</small>`;
+      }
+      html += `</div>`;
+    }
+    if (data.recommended_changes?.length) {
+      html += `<button class="primary" id="applyConflictChanges">应用推荐错峰方案</button>`;
     }
     html += `</div>`;
   }
   return html;
+}
+
+async function applyConflictChanges() {
+  const changes = state.lastConflictChanges || [];
+  if (!changes.length) {
+    showToast("当前没有可应用的自动调整。", "error");
+    return;
+  }
+  const dayMap = {"周一":1,"周二":2,"周三":3,"周四":4,"周五":5};
+  let applied = 0;
+  for (const change of changes) {
+    if (change.action !== "reschedule") continue;
+    const course = (state.conflictCourses || []).find((item) => {
+      const itemDay = ({1:"周一",2:"周二",3:"周三",4:"周四",5:"周五"})[item.dayNum] || item.day;
+      return item.name === change.course
+        && itemDay === change.from?.day
+        && (item.startTime || item.start) === change.from?.start;
+    });
+    if (!course) continue;
+    course.dayNum = dayMap[change.to?.day] || course.dayNum;
+    course.startTime = change.to?.start || course.startTime;
+    course.endTime = change.to?.end || course.endTime;
+    applied += 1;
+  }
+  renderConflict();
+  await runConflict();
+  showToast(`已应用 ${applied} 项错峰调整，并重新检查冲突。`);
 }
 
 function removeConflictCourse(idx) {
@@ -1678,8 +2069,9 @@ function chatContext() {
 }
 
 function chatBubble(item) {
-  const displayText = escapeHtml(item.text || "").replace(/\n/g, "<br>")
-    .replace(/(https?:\/\/[^\s<"'>）、，；：。！？]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:#0ea5e9;text-decoration:underline">🔗 教师主页</a>');
+  const displayText = item.role === "assistant" && !item.thinking
+    ? renderMarkdownSafe(item.text || "")
+    : escapeHtml(item.text || "").replace(/\n/g, "<br>");
   return `<div class="chat-message ${item.role} ${item.thinking ? "thinking" : ""}">
     <div>${item.thinking ? thinkingHtml(item.text) : displayText}</div>
     ${item.suggestions?.length ? `<div class="suggestions">${item.suggestions.map((text) => `<button data-suggest="${escapeHtml(text)}">${escapeHtml(text)}</button>`).join("")}</div>` : ""}
@@ -1904,6 +2296,7 @@ function initAiPage() {
 
   // 删除对话
   $("#aiDeleteConversation").addEventListener("click", deleteAiConversation);
+  $("#aiExportConversation").addEventListener("click", exportAiConversation);
 
   // 清空记忆
   $("#aiClearMemory").addEventListener("click", clearKnowledgeBase);
@@ -2127,7 +2520,7 @@ function renderAiMessages() {
         <h1>勤勉 AI 助手</h1>
         <p>华侨大学学业规划 · 辐射级智能分析 · 长期记忆已${state.memoryEnabled ? "开启" : "关闭"}</p>
         <div class="ai-welcome-suggestions">
-          <button class="ai-chip" data-suggest="算法工程师4年课表怎么做">🎯 算法工程师课表</button>
+          <button class="ai-chip" data-suggest="算法工程师完整学习路线怎么做">🎯 算法工程师课表</button>
           <button class="ai-chip" data-suggest="数据结构这门课难吗">⚡ 课程难度分析</button>
           <button class="ai-chip" data-suggest="计算机科学与技术学院有哪些老师">👨‍🏫 查老师</button>
           <button class="ai-chip" data-suggest="推荐热门5个专业方向">🔥 热门方向</button>
@@ -2141,11 +2534,16 @@ function renderAiMessages() {
   container.innerHTML = messages
     .map((msg, idx) => {
       const role = msg.role === "user" ? "user" : "assistant";
-      const content = escapeHtml(msg.content || "").replace(/\n/g, "<br>");
+      const content = role === "assistant"
+        ? renderMarkdownSafe(msg.content || "")
+        : escapeHtml(msg.content || "").replace(/\n/g, "<br>");
       const avatar = role === "user" ? "👤" : "⚛";
       return `<div class="ai-msg ${role}">
         <div class="ai-msg-avatar">${avatar}</div>
-        <div class="ai-msg-bubble">${content}</div>
+        <div class="ai-msg-stack">
+          <div class="ai-msg-bubble">${content}</div>
+          ${msg.extraHtml ? `<div class="ai-msg-extra">${msg.extraHtml}</div>` : ""}
+        </div>
       </div>`;
     })
     .join("");
@@ -2176,14 +2574,17 @@ function appendAiMessage(role, content, suggestions = [], extraHtml = "") {
 
   const msgIndex = state.aiConversation.length;
   const avatar = role === "user" ? "👤" : "⚛";
-  const displayContent = escapeHtml(content || "").replace(/\n/g, "<br>")
-    .replace(/(https?:\/\/[^\s<"'>）、，；：。！？]+)/g, '<a href="$1" target="_blank" rel="noopener" style="color:#0ea5e9;text-decoration:underline">🔗 教师主页</a>');
+  const displayContent = role === "assistant"
+    ? renderMarkdownSafe(content || "")
+    : escapeHtml(content || "").replace(/\n/g, "<br>");
   const html = `<div class="ai-msg ${role}" data-msg-index="${msgIndex}">
     <div class="ai-msg-avatar">${avatar}</div>
-    <div class="ai-msg-bubble">${displayContent}
-      <button class="ai-msg-del" onclick="deleteAiMessage(${msgIndex})" title="删除此条消息">✕</button>
+    <div class="ai-msg-stack">
+      <div class="ai-msg-bubble">${displayContent}
+        <button class="ai-msg-del" onclick="deleteAiMessage(${msgIndex})" title="删除此条消息">✕</button>
+      </div>
+      ${extraHtml ? `<div class="ai-msg-extra">${extraHtml}</div>` : ""}
     </div>
-    ${extraHtml ? `<div style="margin-top:12px">${extraHtml}</div>` : ""}
   </div>`;
 
   container.insertAdjacentHTML("beforeend", html);
@@ -2367,7 +2768,7 @@ async function handleFileUpload(file) {
           // Not a timetable - treat as general chat
           const answer = result.summary || "已收到文件，但未能识别出课表信息。请检查文件内容或上传更清晰的截图。";
           state.aiConversation.push({ role: "assistant", content: answer });
-          appendAiMessage("assistant", answer, ["上传课表截图", "算法工程师4年课表", "学分体检"]);
+          appendAiMessage("assistant", answer, ["上传课表截图", "算法工程师完整学习路线", "学分体检"]);
           state.chat.push({ role: "assistant", text: "[AI助手] " + answer.slice(0, 200) });
           renderFloatingChat();
     }
@@ -2377,6 +2778,59 @@ async function handleFileUpload(file) {
   } finally {
     state.aiChatBusy = false;
   }
+}
+
+async function exportAiConversation() {
+  const messages = state.aiConversation || [];
+  if (!messages.length) {
+    showToast("当前对话还没有内容，暂时无法导出。", "error");
+    return;
+  }
+  const title = $("#aiConvTitle")?.textContent?.trim() || "勤勉对话";
+  const format = $("#aiExportFormat")?.value || "markdown";
+  if (format !== "markdown") {
+    const button = $("#aiExportConversation");
+    button.disabled = true;
+    try {
+      await downloadServerExport({
+        kind: "conversation",
+        format,
+        title,
+        data: {
+          user: state.user?.username || "",
+          messages: messages.map((item) => ({
+            role: item.role,
+            content: String(item.content || item.text || ""),
+          })),
+        },
+        fallbackFilename: `${safeFilename(title)}_对话.${format}`,
+      });
+      showToast(`当前对话已导出为 ${format.toUpperCase()}。`);
+    } catch (error) {
+      showToast(error.message, "error");
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  }
+  const lines = [
+    `# ${title}`,
+    "",
+    `- 导出时间：${new Date().toLocaleString("zh-CN")}`,
+    `- 用户：${state.user?.username || ""}`,
+    `- 消息数：${messages.length}`,
+    "",
+  ];
+  for (const item of messages) {
+    const role = item.role === "user" ? "用户" : "勤勉 AI";
+    const raw = String(item.content || item.text || "");
+    const holder = document.createElement("div");
+    holder.innerHTML = raw;
+    const content = holder.textContent || holder.innerText || raw;
+    lines.push(`## ${role}`, "", content.trim(), "");
+  }
+  downloadText(`${safeFilename(title)}_对话.md`, lines.join("\n"), "text/markdown;charset=utf-8");
+  showToast("当前对话已导出为 Markdown 文件。");
 }
 
 function clearFileUpload() {
@@ -2440,7 +2894,7 @@ async function sendAiMessage() {
     // 检查是否为课表规划结果 → 渲染完整学期时间线
     const extraHtml = renderCareerPlanExtra(response);
 
-    state.aiConversation.push({ role: "assistant", content: answer + (extraHtml ? "\n\n" + extraHtml : "") });
+    state.aiConversation.push({ role: "assistant", content: answer, extraHtml });
     appendAiMessage("assistant", answer, suggestions, extraHtml);
     // 同步到浮动聊天
     state.chat.push({ role: "assistant", text: `[AI助手] ${answer.slice(0, 200)}${answer.length > 200 ? "…" : ""}` });

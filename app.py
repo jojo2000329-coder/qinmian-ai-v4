@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import flask
-from flask import Flask, Response, g, jsonify, request, session, stream_with_context
+from flask import Flask, Response, g, jsonify, request, send_file, session, stream_with_context
 from flask_cors import CORS
 
 from qinmian.agent import QinmianAgent
@@ -52,6 +52,7 @@ from qinmian.conversation_store import (
     rename_conversation,
 )
 from qinmian.data_store import PROJECT_ROOT, QinmianDataStore
+from qinmian.export_service import build_export
 from qinmian.knowledge_base import KnowledgeBase
 from qinmian.personas import public_personas
 from qinmian.planner import CareerPlanner
@@ -303,7 +304,9 @@ def api_meta():
             "langchain_available": _langchain_available(),
             "knowledge_base": True,
             "conversations": True,
+            "exports": ["markdown", "csv", "docx", "pdf", "xls"],
         },
+        "data_quality": STORE.data_quality_summary(),
     })
 
 
@@ -1035,6 +1038,31 @@ def api_plan():
     body = _body_json()
     return jsonify(
         CAREER_PLANNER.plan(body.get("career", "算法工程师"), body.get("major_id"))
+    )
+
+
+@app.route("/api/exports", methods=["POST"])
+def api_exports():
+    body = _body_json()
+    if len(json.dumps(body, ensure_ascii=False)) > 2_000_000:
+        return jsonify({"error": "导出数据过大，请缩小导出范围"}), 413
+    try:
+        output, filename, mimetype = build_export(
+            body.get("kind", ""),
+            body.get("format", ""),
+            body.get("title", ""),
+            body.get("data") or {},
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except ImportError as exc:
+        return jsonify({"error": f"服务器缺少导出组件：{exc.name}"}), 503
+    return send_file(
+        output,
+        mimetype=mimetype,
+        as_attachment=True,
+        download_name=filename,
+        max_age=0,
     )
 
 

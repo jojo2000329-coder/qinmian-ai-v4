@@ -56,6 +56,36 @@ class QinmianDataStore:
         self.teacher_roster_doc = load_json_optional("teacher_roster.json", {"teachers": []})
         self.faculty_profiles_doc = load_json_optional("faculty_profiles.json", {"source": {}, "colleges": [], "ranks": [], "teachers": []})
         self.course_assignments_doc = load_json_optional("course_assignments.json", {"source": {}, "assignments": []})
+        self._data_quality = {
+            "major_duplicates_removed": 0,
+            "faculty_duplicates_removed": 0,
+            "assignment_duplicates_removed": 0,
+            "curriculum_duplicates_removed": 0,
+        }
+        self.majors_doc["majors"] = self._deduplicate_records(
+            self.majors_doc.get("majors", []),
+            lambda row: str(row.get("id", "")).strip(),
+            "major_duplicates_removed",
+        )
+        self.faculty_profiles_doc["teachers"] = self._deduplicate_records(
+            self.faculty_profiles_doc.get("teachers", []),
+            lambda row: (
+                str(row.get("teacher_id", "")).strip()
+                or "|".join(
+                    [
+                        str(row.get("name", "")).strip(),
+                        ",".join(sorted(str(value).strip() for value in row.get("colleges", []) if str(value).strip())),
+                        str(row.get("title", "")).strip(),
+                    ]
+                )
+            ),
+            "faculty_duplicates_removed",
+        )
+        self.course_assignments_doc["assignments"] = self._deduplicate_records(
+            self.course_assignments_doc.get("assignments", []),
+            self._assignment_identity,
+            "assignment_duplicates_removed",
+        )
         self.imported_teacher_schedule_path = DATA_DIR / "imported_teacher_schedule.json"
         self.imported_teacher_schedule = self._load_imported_teacher_schedule()
         self._merge_imported_teacher_schedule()
@@ -63,6 +93,66 @@ class QinmianDataStore:
         self.major_by_id = {m["id"]: m for m in self.majors}
         self.watchers: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
+
+    def _deduplicate_records(
+        self,
+        rows: list[dict[str, Any]],
+        key_builder,
+        counter_name: str,
+    ) -> list[dict[str, Any]]:
+        unique: list[dict[str, Any]] = []
+        seen: set[Any] = set()
+        removed = 0
+        for row in rows:
+            key = key_builder(row)
+            if key and key in seen:
+                removed += 1
+                continue
+            if key:
+                seen.add(key)
+            unique.append(row)
+        self._data_quality[counter_name] = removed
+        return unique
+
+    def _assignment_identity(self, row: dict[str, Any]) -> tuple[Any, ...]:
+        return (
+            str(row.get("teacher", "")).strip(),
+            str(row.get("course", "")).strip(),
+            float(row.get("credits") or 0),
+            tuple(sorted(str(value).strip() for value in row.get("majors", []) if str(value).strip())),
+            str(row.get("college", "")).strip(),
+            str(row.get("campus", "")).strip(),
+            str(row.get("term", "")).strip(),
+            str(row.get("source_sheet", "")).strip(),
+        )
+
+    @staticmethod
+    def program_years_for(major: dict[str, Any]) -> int:
+        text = " ".join(
+            [
+                str(major.get("display_name", "")),
+                str(major.get("duration", "")),
+                " ".join(str(value) for value in major.get("streams", [])),
+            ]
+        )
+        match = re.search(r"(?:学制\s*[：:]?\s*)?([三四五六])年", text)
+        if match:
+            return {"三": 3, "四": 4, "五": 5, "六": 6}[match.group(1)]
+        if str(major.get("name", "")).strip() == "临床医学":
+            return 5
+        return 4
+
+    @classmethod
+    def program_duration_label(cls, major: dict[str, Any]) -> str:
+        return f"{cls.program_years_for(major)}年制"
+
+    def data_quality_summary(self) -> dict[str, Any]:
+        return {
+            **self._data_quality,
+            "major_count": len(self.majors),
+            "faculty_count": len(self.faculty_profiles_doc.get("teachers", [])),
+            "assignment_count": len(self.course_assignments_doc.get("assignments", [])),
+        }
 
     def _load_imported_teacher_schedule(self) -> list[dict[str, Any]]:
         if not self.imported_teacher_schedule_path.exists():
@@ -644,11 +734,43 @@ class QinmianDataStore:
                 item["origin"] = origin
                 item["teachers"] = self.teachers_for_course(item["name"])
                 courses.append(item)
+        unique_courses: list[dict[str, Any]] = []
+        course_keys: set[tuple[str, int, str]] = set()
+        duplicates_removed = 0
+        for course in courses:
+            key = (
+                re.sub(r"\s+", "", str(course.get("name", ""))).lower(),
+                int(course.get("semester") or 0),
+                str(course.get("category", "")).strip(),
+            )
+            if key in course_keys:
+                duplicates_removed += 1
+                continue
+            course_keys.add(key)
+            unique_courses.append(course)
+        courses = unique_courses
+        self._data_quality["curriculum_duplicates_removed"] = max(
+            self._data_quality["curriculum_duplicates_removed"],
+            duplicates_removed,
+        )
+
         by_category: dict[str, int] = {}
         for course in courses:
             by_category[course["category"]] = by_category.get(course["category"], 0) + course["credits"]
+        program_years = self.program_years_for(major)
+        semester_count = program_years * 2
+        covered_semesters = sorted(
+            {
+                int(course.get("semester") or 0)
+                for course in courses
+                if 1 <= int(course.get("semester") or 0) <= semester_count
+            }
+        )
         return {
             "major": major,
+            "program_years": program_years,
+            "duration_label": self.program_duration_label(major),
+            "semester_count": semester_count,
             "credit_rule": rule,
             "student_type": student_type,
             "available_student_types": {
@@ -667,6 +789,16 @@ class QinmianDataStore:
                 for c in sorted(courses, key=lambda c: (c.get("semester", 99), c["name"]))
                 if c["category"] in {"专业选修", "通识选修"}
             ][:10],
+            "data_quality": {
+                "course_count": len(courses),
+                "duplicates_removed": duplicates_removed,
+                "covered_semesters": covered_semesters,
+                "missing_semesters": [
+                    semester
+                    for semester in range(1, semester_count + 1)
+                    if semester not in covered_semesters
+                ],
+            },
         }
 
     def teachers_for_course(self, course_name: str) -> list[dict[str, str]]:

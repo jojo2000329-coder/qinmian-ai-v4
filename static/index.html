@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <div class="app-toast" id="appToast" role="status" aria-live="polite" hidden></div>
+
     <!-- ═══ 用户登录/注册 ═══ -->
     <div class="auth-overlay" id="authOverlay" hidden>
       <div class="auth-card">
@@ -263,6 +265,15 @@
               <label class="ai-persona-select"><span>🧠</span>
                 <select id="aiPersona"></select>
               </label>
+              <div class="export-control">
+                <select id="aiExportFormat" class="export-format" title="选择导出格式">
+                  <option value="markdown">Markdown</option>
+                  <option value="docx">DOCX</option>
+                  <option value="pdf">PDF</option>
+                  <option value="xls">XLS</option>
+                </select>
+                <button id="aiExportConversation" class="ai-export-btn" title="导出当前对话">⇩ 导出对话</button>
+              </div>
               <button id="aiDeleteConversation" class="ai-btn-icon" title="删除当前对话">🗑</button>
             </div>
           </div>
@@ -272,7 +283,7 @@
               <h1>勤勉 AI 助手</h1>
               <p>华侨大学学业规划 · 晴空智能分析</p>
               <div class="ai-welcome-suggestions">
-                <button class="ai-chip" data-suggest="算法工程师4年课表怎么做">🎯 算法工程师课表</button>
+                <button class="ai-chip" data-suggest="算法工程师完整学习路线怎么做">🎯 算法工程师课表</button>
                 <button class="ai-chip" data-suggest="数据结构这门课难吗">⚡ 课程难度分析</button>
                 <button class="ai-chip" data-suggest="计算机科学与技术学院有哪些老师">👨‍🏫 查老师</button>
                 <button class="ai-chip" data-suggest="推荐热门5个专业方向">🔥 热门方向</button>

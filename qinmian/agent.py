@@ -244,7 +244,7 @@ class QinmianAgent:
                 "intent": "hot_directions",
                 "answer": self._hot_answer(data),
                 "data": data,
-                "suggestions": ["按算法工程师生成4年课表", "查看计算机科学与技术", "比较人工智能和软件工程"],
+                "suggestions": ["按算法工程师生成完整学习路线", "查看计算机科学与技术", "比较人工智能和软件工程"],
             }, major_id))
         if self._mentions_seats(msg):
             course = self._extract_course(msg) or "机器学习"
@@ -306,7 +306,7 @@ class QinmianAgent:
                 "intent": "credit_check",
                 "answer": self._credit_answer(data),
                 "data": data,
-                "suggestions": ["输入已修课程再体检", "查看专业必修课", "生成4年课表"],
+                "suggestions": self._credit_suggestions(data),
                 "ui_actions": ui_actions,
             }, major_id))
         if self._mentions_career_plan(msg):
@@ -318,13 +318,13 @@ class QinmianAgent:
                 # 按学科推断默认岗位
                 career = self._infer_career_from_major(major_name)
             if not career:
-                career = "软件工程师"
+                career = "专业相关岗位"
             data = self.career_planner.plan(career, major_id)
             return self._with_memory(message, self._with_llm(message, {
                 "intent": "career_plan",
                 "answer": self._career_answer(data),
                 "data": data,
-                "suggestions": ["算法工程师课表", "数据分析师课表", "集成电路工程师课表"],
+                "suggestions": self._career_suggestions(data),
             }, major_id))
         if explicit_major_id or self._mentions_curriculum_detail(msg) or self._asks_selected_major(msg, context_major_id):
             if not major_id:
@@ -345,7 +345,7 @@ class QinmianAgent:
                 "intent": "curriculum",
                 "answer": self._curriculum_answer(data),
                 "data": data,
-                "suggestions": ["生成该专业4年课表", "做学分体检", "查看任课老师"],
+                "suggestions": self._curriculum_suggestions(data, msg),
                 "ui_actions": ui_actions,
             }, major_id))
         majors = self.store.list_majors(q=msg)[:10]
@@ -360,7 +360,7 @@ class QinmianAgent:
             "intent": "free_chat",
             "answer": "我在。这个问题我可以先陪你聊；如果你想让我结合华侨大学专业、课程、学分或老师数据分析，也可以直接把目标说出来。",
             "data": {},
-            "suggestions": ["你能做什么", "我想随便聊聊专业选择", "算法工程师4年课表"],
+            "suggestions": ["你能做什么", "我想随便聊聊专业选择", "算法工程师完整学习路线"],
         }, None, include_major_context=False))
 
     def llm_status(self) -> dict[str, Any]:
@@ -1256,7 +1256,7 @@ class QinmianAgent:
         if any(k in major_name for k in ["医学", "药学", "临床", "制药"]):
             return "医疗/医药专员"
 
-        return "软件工程师"
+        return f"{major_name}相关岗位" if major_name else "专业相关岗位"
 
     def _extract_course(self, msg: str) -> str | None:
         for name in sorted(self.store.all_course_names(), key=len, reverse=True):
@@ -1292,7 +1292,131 @@ class QinmianAgent:
     def _career_answer(self, data: dict[str, Any]) -> str:
         major = data["selected_major"]
         top_majors = "、".join(row["major"]["display_name"] for row in data["recommended_majors"][:4])
-        return f"我把你的目标识别为“{data['matched_role']}”。建议优先看：{top_majors}。当前按 {major['display_name']} 生成 {data['semester_count']} 学期路线，核心课包括：{'、'.join(data['must_courses'][:6])}。"
+        fit = data.get("selected_major_fit", {})
+        fit_text = (
+            f"当前专业匹配度 {fit.get('score', 0)}%（{fit.get('level', '待评估')}）"
+            if fit
+            else "当前专业已完成匹配评估"
+        )
+        core_courses = "、".join(data["must_courses"][:6]) or "以当前专业培养方案为基础动态补充"
+        return f"我把你的目标识别为“{data['matched_role']}”。{fit_text}。建议优先看：{top_majors}。当前按 {major['display_name']} 生成 {data['semester_count']} 学期路线，核心课包括：{core_courses}。"
+
+    def _program_semester_count(self, major: dict[str, Any]) -> int:
+        return self.store.program_years_for(major) * 2
+
+    def _is_medical_major(self, major: dict[str, Any]) -> bool:
+        major_text = " ".join(
+            [
+                major.get("name", ""),
+                major.get("display_name", ""),
+                major.get("college", ""),
+                major.get("discipline", ""),
+            ]
+        )
+        return major.get("discipline") == "medicine" or any(
+            keyword in major_text
+            for keyword in ["临床", "医学", "药学", "医学院"]
+        )
+
+    def _is_clinical_major(self, major: dict[str, Any]) -> bool:
+        return "临床医学" in " ".join(
+            [
+                major.get("name", ""),
+                major.get("display_name", ""),
+            ]
+        )
+
+    def _curriculum_suggestions(
+        self,
+        data: dict[str, Any],
+        message: str,
+    ) -> list[str]:
+        major = data.get("major", {})
+        major_name = major.get("name") or major.get("display_name") or "当前专业"
+        semester_count = self._program_semester_count(major)
+        asks_schedule = any(
+            keyword in message
+            for keyword in ["学期", "课表", "精排", "安排", "优化", "路线"]
+        )
+
+        if self._is_clinical_major(major):
+            asks_full_program = any(
+                keyword in message
+                for keyword in ["五年", "5年", "10学期", "完整", "课程规划", "培养路线"]
+            )
+            asks_first_eight = any(
+                keyword in message
+                for keyword in ["1-8", "1~8", "一到八", "前8", "前八"]
+            )
+            if asks_schedule and asks_first_eight:
+                return [
+                    f"{major_name}第9-10学期临床实习怎么安排",
+                    f"{major_name}课程与执业医师考试怎么衔接",
+                    f"{major_name}毕业学分体检",
+                ]
+            if asks_schedule and asks_full_program:
+                return [
+                    f"{major_name}第1-4学期基础医学课程怎么学",
+                    f"{major_name}第5-8学期临床核心课怎么衔接",
+                    f"{major_name}第9-10学期实习与毕业考核怎么安排",
+                ]
+            return [
+                f"{major_name}五年10学期完整课程规划",
+                f"{major_name}基础医学到临床实习的先修关系",
+                f"{major_name}毕业学分与实习要求",
+            ]
+
+        if self._is_medical_major(major):
+            return [
+                f"{major_name}第1-{semester_count}学期完整课程规划",
+                f"{major_name}核心课程和实践怎么安排",
+                f"{major_name}毕业学分体检",
+            ]
+
+        if asks_schedule:
+            return [
+                f"{major_name}第5-{semester_count}学期怎么优化",
+                f"{major_name}核心课先修关系",
+                f"{major_name}毕业学分体检",
+            ]
+        return [
+            f"{major_name}{semester_count}学期完整课表",
+            f"{major_name}哪些核心课最重要",
+            f"{major_name}适合哪些职业方向",
+        ]
+
+    def _credit_suggestions(self, data: dict[str, Any]) -> list[str]:
+        major = data.get("major", {})
+        major_name = major.get("name") or major.get("display_name") or "当前专业"
+        semester_count = self._program_semester_count(major)
+        if self._is_medical_major(major):
+            return [
+                f"输入{major_name}已修课程继续体检",
+                f"{major_name}还缺哪些核心课和实践学分",
+                f"{major_name}第1-{semester_count}学期怎么安排",
+            ]
+        return [
+            f"输入{major_name}已修课程继续体检",
+            f"{major_name}还缺哪些必修课",
+            f"{major_name}{semester_count}学期怎么规划",
+        ]
+
+    def _career_suggestions(self, data: dict[str, Any]) -> list[str]:
+        major = data.get("selected_major", {})
+        major_name = major.get("name") or major.get("display_name") or "当前专业"
+        role_name = data.get("matched_role") or data.get("career") or "目标岗位"
+        semester_count = int(data.get("semester_count") or self._program_semester_count(major))
+        if self._is_medical_major(major):
+            return [
+                f"{major_name}第9-{semester_count}学期临床实践安排",
+                f"{role_name}需要哪些执业与实践能力",
+                f"{major_name}毕业学分体检",
+            ]
+        return [
+            f"{role_name}还需要补哪些核心能力",
+            f"{major_name}第5-{semester_count}学期项目怎么安排",
+            f"{major_name}毕业学分体检",
+        ]
 
     def _extract_year(self, msg: str) -> int | None:
         """从消息中提取年级/学年（大一=1, 大二=2, ...）"""
@@ -1379,9 +1503,11 @@ class QinmianAgent:
             year_label = None
             semester_label = f"第{semester}学期"
         elif year is not None:
-            # 三年制/学年：除最后一年外每年3个学期（小学期制）
-            # 五年制建筑学：大一[1,2,3] 大二[4,5,6] 大三[7,8,9] 大四[10,11,12] 大五[13,14]
-            year_sems = {1: [1, 2, 3], 2: [4, 5, 6], 3: [7, 8, 9], 4: [10, 11, 12], 5: [13, 14]}
+            # 本科培养路线按每学年两个标准学期展示。
+            year_sems = {
+                year_number: [year_number * 2 - 1, year_number * 2]
+                for year_number in range(1, 7)
+            }
             target = year_sems.get(year, [])
             filtered = {}
             for s in sorted(semesters.keys()):
@@ -1411,7 +1537,9 @@ class QinmianAgent:
         persona_tag = f"[{p['name']}]"
         parts = [f"🏛 【{major['display_name']}】专业分析 {persona_tag}"]
         parts.append(f"所属学院：{major['college']}｜校区：{major['campus']}")
-        parts.append(f"学制：{major.get('duration', '四年制')}")
+        duration_label = data.get("duration_label") or self.store.program_duration_label(major)
+        semester_count = int(data.get("semester_count") or self._program_semester_count(major))
+        parts.append(f"学制：{duration_label}（共{semester_count}个学期）")
         DISPLAY_DISCIPLINES = {
             "computer": "计算机科学与技术",
             "software": "软件工程",
@@ -1449,32 +1577,27 @@ class QinmianAgent:
             parts.append("\n📅 【各学期完整课程规划】")
 
         if semesters:
-            # 检查3学期制下是否有缺失的学期（小学期）
-            for sem in sorted(semesters.keys()):
-                if sem > 15:
+            display_semesters = (
+                sorted(semesters.keys())
+                if year_label or semester_label
+                else list(range(1, semester_count + 1))
+            )
+            for sem in display_semesters:
+                if sem > semester_count:
                     continue
-                clist = semesters[sem]
+                clist = semesters.get(sem, [])
                 parts.append(f"\n  ── 第{sem}学期（{len(clist)}门课）──")
+                if not clist:
+                    if self._is_clinical_major(major) and sem == semester_count:
+                        parts.append("  临床实习延续、毕业考核与执业准备（具体安排以医学院最终培养方案为准）")
+                    else:
+                        parts.append("  当前数据未细分该学期课程，请以学院最新培养方案为准。")
+                    continue
                 for c in clist[:10]:
                     parts.append(f"  {course_desc(c)}")
                 if len(clist) > 10:
                     parts.append(f"  ...另有{len(clist)-10}门")
             # 如果是按年级查询，补充小学期
-            if year_label and year is not None:
-                year_third_sem = {1: 3, 2: 6, 3: 9, 4: 12, 5: 14}
-                ts = year_third_sem.get(year)
-                if ts and ts not in semesters:
-                    # 自动插入小学期实践课程
-                    summer_course = {
-                        "name": "小学期实践",
-                        "credits": 2,
-                        "category": "实践与创新",
-                        "semester": ts,
-                    }
-                    semesters[ts] = [summer_course]
-                    clist = semesters[ts]
-                    parts.append(f"\n  ── 第{ts}学期（小学期 · {len(clist)}门课）──")
-                    parts.append(f"  {course_desc(summer_course)}")
         else:
             parts.append("  该年级暂无详细课程数据。")
 
