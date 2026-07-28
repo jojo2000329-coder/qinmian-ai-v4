@@ -120,6 +120,21 @@ def delete_document(namespace: str, owner_id: str, document_id: str) -> bool:
     return deleted
 
 
+def delete_owner_documents(owner_id: str) -> int:
+    """Delete every private document owned by one account."""
+    _ensure_schema()
+    with _connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                DELETE FROM qinmian_documents
+                WHERE owner_id = %s
+                """,
+                (owner_id,),
+            )
+            return max(0, cursor.rowcount)
+
+
 def list_documents(namespace: str, owner_id: str, limit: int = 500) -> list[Any]:
     """List an owner's documents from newest to oldest."""
     _ensure_schema()

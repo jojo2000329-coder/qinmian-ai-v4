@@ -23,6 +23,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import flask
 from flask import Flask, Response, g, jsonify, request, send_file, session, stream_with_context
@@ -38,6 +39,7 @@ from qinmian.analytics import (
 )
 from qinmian.auth_store import (
     UserStore,
+    delete_user_data,
     load_or_create_session_secret,
     user_data_path,
 )
@@ -55,6 +57,7 @@ from qinmian.data_store import PROJECT_ROOT, QinmianDataStore
 from qinmian.export_service import build_export
 from qinmian.knowledge_base import KnowledgeBase
 from qinmian.personas import public_personas
+from qinmian.persistence import database_enabled, delete_owner_documents
 from qinmian.planner import CareerPlanner
 from qinmian.tools import FunctionCallExecutor, get_function_schemas
 from qinmian.user_llm import UserLLMConfigStore
@@ -98,6 +101,67 @@ CAREER_PLANNER = CareerPlanner(STORE)
 FC_EXECUTOR = FunctionCallExecutor(STORE)
 USER_RUNTIME_STORES = UserRuntimeStoreManager(STORE)
 USER_LLM_CONFIGS = UserLLMConfigStore(str(app.config["SECRET_KEY"]))
+
+DATA_RELEASE_DATE = "2026-07-23"
+DATA_DISCLAIMER = (
+    "课程、职业与教师分析仅供学业规划参考；培养方案、开课安排和教师信息"
+    "请以华侨大学教务处及学院最新通知为准。"
+)
+SIMULATION_FEATURES = {
+    "career_plan": "规则与数据驱动的职业规划参考，不代表就业承诺",
+    "seat_monitor": "演示用模拟余量，不连接学校实时选课系统",
+    "conflict_resolution": "决策辅助建议，不会直接修改教务系统课表",
+    "generated_curriculum": "部分课程按培养模板补全，需以官方方案复核",
+}
+_RATE_LIMIT_LOCK = threading.RLock()
+_RATE_LIMIT_BUCKETS: dict[str, list[float]] = {}
+
+
+def _client_address() -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    return (forwarded.split(",", 1)[0].strip() or request.remote_addr or "unknown")[:128]
+
+
+def _rate_limit(key: str, limit: int, window_seconds: int):
+    """Return a 429 response when a small in-process request budget is exhausted."""
+    if app.config.get("TESTING"):
+        return None
+    now = time.time()
+    cutoff = now - window_seconds
+    with _RATE_LIMIT_LOCK:
+        bucket = [stamp for stamp in _RATE_LIMIT_BUCKETS.get(key, []) if stamp > cutoff]
+        if len(bucket) >= limit:
+            retry_after = max(1, int(bucket[0] + window_seconds - now) + 1)
+            response = jsonify({
+                "error": f"操作过于频繁，请在 {retry_after} 秒后重试",
+                "code": "rate_limited",
+                "retry_after": retry_after,
+            })
+            response.status_code = 429
+            response.headers["Retry-After"] = str(retry_after)
+            return response
+        bucket.append(now)
+        _RATE_LIMIT_BUCKETS[key] = bucket
+    return None
+
+
+def _clear_rate_limit(key: str) -> None:
+    with _RATE_LIMIT_LOCK:
+        _RATE_LIMIT_BUCKETS.pop(key, None)
+
+
+def _data_governance() -> dict[str, Any]:
+    return {
+        "release_date": DATA_RELEASE_DATE,
+        "disclaimer": DATA_DISCLAIMER,
+        "official_system_connected": False,
+        "simulation_features": SIMULATION_FEATURES,
+        "source_levels": {
+            "catalog": "公开目录与导入数据",
+            "credits": "官方表格匹配时优先使用，否则标记为模板",
+            "curriculum": "官方字段与规划模板混合，生成内容会明确标记",
+        },
+    }
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -189,7 +253,21 @@ def load_authenticated_user():
 
     if not request.path.startswith("/api/"):
         return None
-    if request.path.startswith("/api/auth/"):
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        origin = request.headers.get("Origin", "").rstrip("/")
+        fetch_site = request.headers.get("Sec-Fetch-Site", "")
+        origin_host = urlsplit(origin).netloc if origin else ""
+        if (origin_host and origin_host != request.host) or fetch_site == "cross-site":
+            return jsonify({
+                "error": "已拒绝跨站请求",
+                "code": "cross_site_request_blocked",
+            }), 403
+    public_auth_paths = {
+        "/api/auth/me",
+        "/api/auth/register",
+        "/api/auth/login",
+    }
+    if request.path in public_auth_paths:
         return None
     if not g.current_user:
         return jsonify({"error": "请先登录", "code": "authentication_required"}), 401
@@ -212,6 +290,8 @@ def health():
         "service": "qinmian-ai-v4",
         "major_count": len(STORE.majors),
         "model_configured": AGENT.llm_status().get("enabled", False),
+        "storage": "postgresql" if database_enabled() else "local",
+        "data_release_date": DATA_RELEASE_DATE,
     })
 
 
@@ -243,6 +323,13 @@ def api_auth_me():
 @app.route("/api/auth/register", methods=["POST"])
 def api_auth_register():
     body = _body_json()
+    limited = _rate_limit(
+        f"register:{_client_address()}",
+        limit=5,
+        window_seconds=60 * 60,
+    )
+    if limited:
+        return limited
     password = str(body.get("password", ""))
     confirmation = str(body.get("password_confirm", password))
     if password != confirmation:
@@ -264,9 +351,15 @@ def api_auth_register():
 @app.route("/api/auth/login", methods=["POST"])
 def api_auth_login():
     body = _body_json()
-    user = USER_STORE.authenticate(body.get("username", ""), body.get("password", ""))
+    username = str(body.get("username", "")).strip().casefold()
+    limit_key = f"login:{_client_address()}:{username}"
+    limited = _rate_limit(limit_key, limit=10, window_seconds=10 * 60)
+    if limited:
+        return limited
+    user = USER_STORE.authenticate(username, body.get("password", ""))
     if not user:
         return jsonify({"error": "用户名或密码错误"}), 401
+    _clear_rate_limit(limit_key)
     _start_user_session(user)
     return jsonify({"status": "ok", "user": user})
 
@@ -275,6 +368,59 @@ def api_auth_login():
 def api_auth_logout():
     session.clear()
     return jsonify({"status": "ok"})
+
+
+@app.route("/api/auth/password", methods=["POST"])
+def api_auth_password():
+    body = _body_json()
+    new_password = str(body.get("new_password", ""))
+    confirmation = str(body.get("new_password_confirm", ""))
+    if new_password != confirmation:
+        return jsonify({"error": "两次输入的新密码不一致"}), 400
+    limited = _rate_limit(
+        f"password:{_current_user_id()}",
+        limit=5,
+        window_seconds=10 * 60,
+    )
+    if limited:
+        return limited
+    try:
+        changed = USER_STORE.change_password(
+            _current_user_id(),
+            body.get("current_password", ""),
+            new_password,
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not changed:
+        return jsonify({"error": "当前密码错误"}), 401
+    return jsonify({"status": "ok", "message": "密码修改成功"})
+
+
+@app.route("/api/auth/account", methods=["DELETE"])
+def api_auth_account():
+    body = _body_json()
+    user_id = _current_user_id()
+    password = body.get("password", "")
+    if str(body.get("confirmation", "")).strip() != "注销账号":
+        return jsonify({"error": "请输入“注销账号”进行确认"}), 400
+    if not USER_STORE.authenticate(g.current_user["username"], password):
+        return jsonify({"error": "密码错误，账号未注销"}), 401
+    USER_LLM_CONFIGS.clear_settings(user_id)
+    USER_RUNTIME_STORES.forget(user_id)
+    with _KNOWLEDGE_LOCK:
+        _KNOWLEDGE_BASES.pop(user_id, None)
+    if database_enabled():
+        delete_owner_documents(user_id)
+    else:
+        delete_user_data(user_id)
+    if not USER_STORE.delete_account(user_id, password):
+        return jsonify({"error": "账号状态已变化，请重新登录后再试"}), 409
+    session.clear()
+    return jsonify({
+        "status": "ok",
+        "message": "账号及个人数据已永久删除",
+    })
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -307,6 +453,7 @@ def api_meta():
             "exports": ["markdown", "csv", "docx", "pdf", "xls"],
         },
         "data_quality": STORE.data_quality_summary(),
+        "data_governance": _data_governance(),
     })
 
 
@@ -337,7 +484,17 @@ def api_major(major_id: str):
 @app.route("/api/curriculum/<path:major_id>")
 def api_curriculum(major_id: str):
     try:
-        return jsonify(STORE.curriculum_for(major_id, _query_arg("student_type", "domestic")))
+        payload = STORE.curriculum_for(
+            major_id,
+            _query_arg("student_type", "domestic"),
+        )
+        payload["evidence"] = {
+            "mode": "reference_template",
+            "official_schedule": False,
+            "release_date": DATA_RELEASE_DATE,
+            "notice": SIMULATION_FEATURES["generated_curriculum"],
+        }
+        return jsonify(payload)
     except KeyError as e:
         return jsonify({"error": str(e)}), 404
 
@@ -362,6 +519,11 @@ def api_seats():
         "offerings": user_store.offerings(),
         "watchers": user_store.watchers,
         "events": user_store.events[-12:],
+        "evidence": {
+            "mode": "simulation",
+            "official_system_connected": False,
+            "notice": SIMULATION_FEATURES["seat_monitor"],
+        },
     })
 
 
@@ -383,6 +545,11 @@ def api_seats_tick():
     user_id = _current_user_id()
     user_store = USER_RUNTIME_STORES.get(user_id)
     result = user_store.tick_seats()
+    result["evidence"] = {
+        "mode": "simulation",
+        "official_system_connected": False,
+        "notice": SIMULATION_FEATURES["seat_monitor"],
+    }
     USER_RUNTIME_STORES.save(user_id)
     return jsonify(result)
 
@@ -494,6 +661,58 @@ def api_llm_config():
     return jsonify({
         **config,
         "status": _llm_status_for_user(),
+    })
+
+
+@app.route("/api/llm/test", methods=["POST"])
+def api_llm_test():
+    """Run a small, user-triggered compatibility check against the active API."""
+    user_id = _current_user_id()
+    limited = _rate_limit(
+        f"llm-test:{user_id}",
+        limit=5,
+        window_seconds=60,
+    )
+    if limited:
+        return limited
+    client = _llm_client_for_user(user_id)
+    if not client.api_key:
+        return jsonify({
+            "error": "当前没有可用的 API Key，请先保存配置",
+            "code": "llm_not_configured",
+        }), 400
+    started = time.perf_counter()
+    try:
+        result = client.request_chat_completion(
+            {
+                "model": client.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "只回复：连接成功",
+                    }
+                ],
+            },
+            timeout=15,
+        )
+        content = str(
+            result.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        ).strip()
+    except (RuntimeError, OSError, ValueError, KeyError, IndexError, json.JSONDecodeError) as exc:
+        return jsonify({
+            "error": str(exc)[:500],
+            "code": "llm_test_failed",
+            "provider": client.provider,
+            "model": client.model,
+        }), 502
+    return jsonify({
+        "status": "ok",
+        "message": content or "连接成功",
+        "provider": client.provider,
+        "model": client.model,
+        "latency_ms": round((time.perf_counter() - started) * 1000),
     })
 
 
@@ -695,6 +914,13 @@ def api_chat():
     - 集成知识库长期记忆（自动检索相关上下文）
     - 自动存储对话到知识库
     """
+    limited = _rate_limit(
+        f"chat:{_current_user_id()}",
+        limit=30,
+        window_seconds=60,
+    )
+    if limited:
+        return limited
     body = _body_json()
     message = body.get("message", "")
     context = body.get("context", {})
@@ -763,6 +989,13 @@ def api_chat_stream():
     SSE 流式聊天端点。
     支持多会话 + 知识库长期记忆。
     """
+    limited = _rate_limit(
+        f"chat-stream:{_current_user_id()}",
+        limit=30,
+        window_seconds=60,
+    )
+    if limited:
+        return limited
     body = _body_json()
     message = body.get("message", "")
     context = body.get("context", {})
@@ -1036,13 +1269,27 @@ def _build_langchain_tools() -> list:
 @app.route("/api/plan", methods=["POST"])
 def api_plan():
     body = _body_json()
-    return jsonify(
-        CAREER_PLANNER.plan(body.get("career", "算法工程师"), body.get("major_id"))
+    result = CAREER_PLANNER.plan(
+        body.get("career", "算法工程师"),
+        body.get("major_id"),
     )
+    result["evidence"] = {
+        "mode": "reference_inference",
+        "official_employment_outcome": False,
+        "notice": SIMULATION_FEATURES["career_plan"],
+    }
+    return jsonify(result)
 
 
 @app.route("/api/exports", methods=["POST"])
 def api_exports():
+    limited = _rate_limit(
+        f"exports:{_current_user_id()}",
+        limit=15,
+        window_seconds=60,
+    )
+    if limited:
+        return limited
     body = _body_json()
     if len(json.dumps(body, ensure_ascii=False)) > 2_000_000:
         return jsonify({"error": "导出数据过大，请缩小导出范围"}), 413
@@ -1077,9 +1324,16 @@ def api_course_analyze():
 @app.route("/api/conflicts", methods=["POST"])
 def api_conflicts():
     body = _body_json()
-    return jsonify(
-        CONFLICT_RESOLVER.resolve(body.get("major_id", ""), body.get("selected_courses", []))
+    result = CONFLICT_RESOLVER.resolve(
+        body.get("major_id", ""),
+        body.get("selected_courses", []),
     )
+    result["evidence"] = {
+        "mode": "decision_support",
+        "official_system_connected": False,
+        "notice": SIMULATION_FEATURES["conflict_resolution"],
+    }
+    return jsonify(result)
 
 
 @app.route("/api/professors/match", methods=["POST"])
@@ -1286,6 +1540,13 @@ def _analyze_image_bytes(data: bytes, filename: str, mime_type: str, prompt: str
 
 @app.route("/api/files/analyze", methods=["POST"])
 def api_file_analyze():
+    limited = _rate_limit(
+        f"file-analysis:{_current_user_id()}",
+        limit=10,
+        window_seconds=10 * 60,
+    )
+    if limited:
+        return limited
     uploaded = request.files.get("file")
     if not uploaded or not uploaded.filename:
         return jsonify({"error": "请选择要上传的文件"}), 400

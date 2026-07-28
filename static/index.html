@@ -84,9 +84,40 @@
           <div class="llm-settings-message" id="llmSettingsMessage" role="status"></div>
           <footer class="llm-settings-actions">
             <button id="llmSettingsCancel" type="button">取消</button>
+            <button id="llmSettingsTest" type="button">测试连接</button>
             <button class="primary" id="llmSettingsSave" type="submit">保存配置</button>
           </footer>
         </form>
+      </section>
+    </div>
+
+    <!-- ═══ 账号安全与个人数据 ═══ -->
+    <div class="account-settings-overlay" id="accountSettingsOverlay" hidden>
+      <section class="account-settings-card" role="dialog" aria-modal="true" aria-labelledby="accountSettingsTitle">
+        <header class="account-settings-header">
+          <div>
+            <h2 id="accountSettingsTitle">账号与安全</h2>
+            <p>修改密码，或永久注销当前账号及其个人数据。</p>
+          </div>
+          <button id="accountSettingsClose" type="button" aria-label="关闭">×</button>
+        </header>
+        <div class="account-settings-body">
+          <form id="passwordChangeForm" class="account-form">
+            <h3>修改密码</h3>
+            <label><span>当前密码</span><input id="currentPassword" type="password" autocomplete="current-password" required /></label>
+            <label><span>新密码</span><input id="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" required /></label>
+            <label><span>确认新密码</span><input id="newPasswordConfirm" type="password" autocomplete="new-password" minlength="8" maxlength="128" required /></label>
+            <div id="accountSettingsMessage" class="account-settings-message" role="status"></div>
+            <button class="primary" type="submit">保存新密码</button>
+          </form>
+          <section class="account-danger-zone">
+            <h3>注销账号</h3>
+            <p>此操作会永久删除该账号的对话、长期记忆、API设置和模拟数据，无法恢复。</p>
+            <label><span>当前密码</span><input id="deleteAccountPassword" type="password" autocomplete="current-password" /></label>
+            <label><span>输入“注销账号”确认</span><input id="deleteAccountConfirmation" autocomplete="off" placeholder="注销账号" /></label>
+            <button id="deleteAccountButton" type="button">永久注销账号</button>
+          </section>
+        </div>
       </section>
     </div>
 
@@ -121,6 +152,7 @@
           <span class="user-avatar">👤</span>
           <span id="currentUsername"></span>
           <button id="llmSettingsButton" type="button" title="配置当前账号的大模型 API">API</button>
+          <button id="accountSettingsButton" type="button" title="账号安全与个人数据">账号</button>
           <button id="logoutButton" type="button">退出</button>
         </div>
         <button id="openAiPage" class="ai-enter-btn" title="进入 AI 助手全屏界面">
@@ -129,6 +161,11 @@
         </button>
       </div>
     </header>
+    <div class="data-notice-banner" id="dataNoticeBanner" role="note">
+      <strong>数据说明</strong>
+      <span id="dataNoticeText">课程与职业分析仅供规划参考，请以学校官方最新通知为准。</span>
+      <span class="data-release" id="dataReleaseDate"></span>
+    </div>
 
     <!-- ═══ 主页面（不含 AI 全屏页面时显示） ═══ -->
     <div id="mainApp">

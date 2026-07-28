@@ -318,6 +318,22 @@ async function api(path, options = {}) {
   return data;
 }
 
+function evidenceNotice(data) {
+  const evidence = data?.evidence;
+  if (!evidence?.notice) return "";
+  return `<div class="evidence-notice" role="note">
+    <strong>使用说明</strong>
+    <span>${escapeHtml(evidence.notice)}</span>
+  </div>`;
+}
+
+function renderDataGovernance() {
+  const governance = state.meta?.data_governance;
+  if (!governance) return;
+  $("#dataNoticeText").textContent = governance.disclaimer || "规划结果仅供参考，请以学校官方信息为准。";
+  $("#dataReleaseDate").textContent = governance.release_date ? `数据版本：${governance.release_date}` : "";
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -645,6 +661,78 @@ async function logout() {
   }
 }
 
+function initAccountSettings() {
+  const overlay = $("#accountSettingsOverlay");
+  const message = $("#accountSettingsMessage");
+  const close = () => {
+    overlay.hidden = true;
+    $("#passwordChangeForm").reset();
+    $("#deleteAccountPassword").value = "";
+    $("#deleteAccountConfirmation").value = "";
+    message.textContent = "";
+    message.className = "account-settings-message";
+  };
+
+  $("#accountSettingsButton").addEventListener("click", () => {
+    overlay.hidden = false;
+    $("#currentPassword").focus();
+  });
+  $("#accountSettingsClose").addEventListener("click", close);
+  overlay.addEventListener("click", (event) => {
+    if (event.target === overlay) close();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !overlay.hidden) close();
+  });
+
+  $("#passwordChangeForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = event.submitter;
+    button.disabled = true;
+    message.textContent = "正在修改密码…";
+    message.className = "account-settings-message";
+    try {
+      await api("/api/auth/password", {
+        method: "POST",
+        body: JSON.stringify({
+          current_password: $("#currentPassword").value,
+          new_password: $("#newPassword").value,
+          new_password_confirm: $("#newPasswordConfirm").value,
+        }),
+      });
+      event.currentTarget.reset();
+      message.textContent = "密码修改成功，下次登录请使用新密码。";
+      message.className = "account-settings-message success";
+    } catch (error) {
+      message.textContent = error.message;
+      message.className = "account-settings-message error";
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $("#deleteAccountButton").addEventListener("click", async () => {
+    const button = $("#deleteAccountButton");
+    button.disabled = true;
+    message.textContent = "正在核验并删除账号数据…";
+    message.className = "account-settings-message";
+    try {
+      await api("/api/auth/account", {
+        method: "DELETE",
+        body: JSON.stringify({
+          password: $("#deleteAccountPassword").value,
+          confirmation: $("#deleteAccountConfirmation").value.trim(),
+        }),
+      });
+      window.location.reload();
+    } catch (error) {
+      message.textContent = error.message;
+      message.className = "account-settings-message error";
+      button.disabled = false;
+    }
+  });
+}
+
 // ═════════════════════════════════════════════════════════════════════
 // 初始化
 // ═════════════════════════════════════════════════════════════════════
@@ -662,6 +750,7 @@ async function init() {
   $("#currentUsername").textContent = state.user.username;
   $("#logoutButton").addEventListener("click", logout);
   initLlmSettings();
+  initAccountSettings();
   await initAuthenticatedApp();
 }
 
@@ -672,12 +761,13 @@ async function initAuthenticatedApp() {
   state.meta = await api("/api/meta");
   state.llmEnabled = state.meta.llm?.enabled || false;
   state.memoryEnabled = state.meta.knowledge_base?.enabled !== false;
+  renderDataGovernance();
 
   // ── 开场动画处理 ──────────────────────────────────────
   const splash = $("#splashScreen");
   if (splash) {
-    // 给 splash 至少展示 2 秒，等 API 也返回后才消失
-    const minSplashTime = new Promise((r) => setTimeout(r, 2200));
+    // 保留短暂品牌过渡，不再额外制造两秒以上等待
+    const minSplashTime = new Promise((r) => setTimeout(r, 650));
     await minSplashTime;
 
     // 淡出 splash
@@ -690,7 +780,7 @@ async function initAuthenticatedApp() {
         state.particleSystem = ps;
         ps.start();
       }
-    }, 800);
+    }, 320);
   } else if (canvas) {
     // 无 splash 时直接启动
     const ps = new ParticleSystem(canvas);
@@ -1014,6 +1104,7 @@ function renderTimetableFromPlan(data) {
   html += `<span class="career-overview-item">📚 ${data.semester_count} 学期路线</span>`;
   if (salary) html += `<span class="career-overview-item">💰 薪资参考：<strong>${salary}</strong></span>`;
   html += `</div>`;
+  html += evidenceNotice(data);
   const fit = data.selected_major_fit || {};
   const fitScore = Number(fit.score || 0);
   const fitTone = fitScore >= 75 ? "high" : fitScore >= 50 ? "medium" : fitScore >= 30 ? "transfer" : "low";
@@ -1328,7 +1419,7 @@ async function tickSeats() {
 
 function seatHtml(data) {
   const offerings = data.offerings || [];
-  return `<h2>模拟教务余位</h2><table class="table"><thead><tr><th>课程</th><th>教师</th><th>时间</th><th>容量</th><th>余位</th></tr></thead><tbody>
+  return `<h2>模拟教务余位 <span class="simulation-badge">演示数据</span></h2>${evidenceNotice(data)}<table class="table"><thead><tr><th>课程</th><th>教师</th><th>时间</th><th>容量</th><th>余位</th></tr></thead><tbody>
     ${offerings.map((item) => `<tr><td>${escapeHtml(item.course)}-${escapeHtml(item.section)}</td><td>${escapeHtml(item.teacher)}</td><td>${escapeHtml(item.day)} ${escapeHtml(item.start)}-${escapeHtml(item.end)}</td><td>${item.enrolled}/${item.capacity}</td><td>${item.remaining > 0 ? `<span class="badge green">${item.remaining}</span>` : `<span class="badge red">满员</span>`}</td></tr>`).join("")}
   </tbody></table><h3>监控事件</h3><div class="result-list">${(data.events || []).map((e) => `<div class="result-item">${escapeHtml(e.time)} · ${escapeHtml(e.message)}</div>`).join("") || `<div class="empty-state">暂无事件</div>`}</div>`;
 }
@@ -1432,7 +1523,7 @@ async function runConflict() {
   }));
   const data = await api("/api/conflicts", { method: "POST", body: JSON.stringify({ major_id: state.selectedMajor.id, selected_courses: courses }) });
   state.lastConflictChanges = data.recommended_changes || [];
-  $("#conflictResult").innerHTML = renderConflictResult(data, data.normalized_courses || courses);
+  $("#conflictResult").innerHTML = evidenceNotice(data) + renderConflictResult(data, data.normalized_courses || courses);
   $("#applyConflictChanges")?.addEventListener("click", applyConflictChanges);
 }
 
@@ -1614,6 +1705,7 @@ function initLlmSettings() {
   $("#llmSettingsButton").addEventListener("click", openLlmSettings);
   $("#llmSettingsClose").addEventListener("click", closeLlmSettings);
   $("#llmSettingsCancel").addEventListener("click", closeLlmSettings);
+  $("#llmSettingsTest").addEventListener("click", testLlmConnection);
   $("#llmProvider").addEventListener("change", () => syncLlmProviderFields(true));
   $("#llmSettingsForm").addEventListener("submit", saveLlmSettings);
   $("#llmSettingsOverlay").addEventListener("click", (event) => {
@@ -1713,6 +1805,27 @@ async function saveLlmSettings(event) {
     message.className = "llm-settings-message error";
   } finally {
     saveButton.disabled = false;
+  }
+}
+
+async function testLlmConnection() {
+  const button = $("#llmSettingsTest");
+  const message = $("#llmSettingsMessage");
+  button.disabled = true;
+  message.textContent = "正在测试已保存的 API 配置…";
+  message.className = "llm-settings-message";
+  try {
+    const result = await api("/api/llm/test", {
+      method: "POST",
+      body: "{}",
+    });
+    message.textContent = `连接成功：${result.provider} / ${result.model}，耗时 ${result.latency_ms} ms。`;
+    message.className = "llm-settings-message success";
+  } catch (error) {
+    message.textContent = `连接失败：${error.message}。如刚修改了配置，请先保存后再测试。`;
+    message.className = "llm-settings-message error";
+  } finally {
+    button.disabled = false;
   }
 }
 

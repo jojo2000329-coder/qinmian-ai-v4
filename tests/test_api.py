@@ -112,6 +112,72 @@ class TestAuth:
         assert browser.post("/api/auth/logout", json={}).status_code == 200
         assert browser.get("/api/auth/me").get_json()["authenticated"] is False
 
+    def test_change_password_roundtrip(self, app):
+        browser = app.test_client()
+        registered = browser.post(
+            "/api/auth/register",
+            json={
+                "username": "password_change_user",
+                "password": "old-password-123",
+                "password_confirm": "old-password-123",
+            },
+        )
+        assert registered.status_code == 201
+        changed = browser.post(
+            "/api/auth/password",
+            json={
+                "current_password": "old-password-123",
+                "new_password": "new-password-456",
+                "new_password_confirm": "new-password-456",
+            },
+        )
+        assert changed.status_code == 200
+        browser.post("/api/auth/logout", json={})
+        assert browser.post(
+            "/api/auth/login",
+            json={"username": "password_change_user", "password": "old-password-123"},
+        ).status_code == 401
+        assert browser.post(
+            "/api/auth/login",
+            json={"username": "password_change_user", "password": "new-password-456"},
+        ).status_code == 200
+
+    def test_delete_account_removes_login(self, app):
+        browser = app.test_client()
+        registered = browser.post(
+            "/api/auth/register",
+            json={
+                "username": "delete_account_user",
+                "password": "delete-password-123",
+                "password_confirm": "delete-password-123",
+            },
+        )
+        assert registered.status_code == 201
+        browser.post("/api/conversations", json={"title": "待删除对话"})
+        deleted = browser.delete(
+            "/api/auth/account",
+            json={
+                "password": "delete-password-123",
+                "confirmation": "注销账号",
+            },
+        )
+        assert deleted.status_code == 200
+        assert browser.get("/api/auth/me").get_json()["authenticated"] is False
+        assert browser.post(
+            "/api/auth/login",
+            json={"username": "delete_account_user", "password": "delete-password-123"},
+        ).status_code == 401
+
+    def test_cross_site_mutation_is_rejected(self, app):
+        browser = app.test_client()
+        response = browser.post(
+            "/api/auth/login",
+            json={"username": "test_user", "password": "test-password-123"},
+            headers={"Origin": "https://malicious.example"},
+        )
+        assert response.status_code == 403
+        assert response.get_json()["code"] == "cross_site_request_blocked"
+
     def test_user_conversations_and_knowledge_are_isolated(self, app):
         alice = app.test_client()
         bob = app.test_client()
@@ -180,6 +246,33 @@ class TestMeta:
         assert "features" in data
         assert data["features"]["flask"] is True
         assert data["features"]["sse"] is True
+        assert data["data_governance"]["official_system_connected"] is False
+        assert data["data_governance"]["release_date"]
+
+    def test_simulation_and_reference_endpoints_are_labeled(self, client):
+        major_id = client.get("/api/majors?q=计算机").get_json()[0]["id"]
+        curriculum = client.get(f"/api/curriculum/{major_id}").get_json()
+        seats = client.get("/api/seats").get_json()
+        conflicts = client.post(
+            "/api/conflicts",
+            json={"major_id": major_id, "selected_courses": []},
+        ).get_json()
+        assert curriculum["evidence"]["official_schedule"] is False
+        assert seats["evidence"]["mode"] == "simulation"
+        assert conflicts["evidence"]["mode"] == "decision_support"
+
+    def test_llm_test_reports_missing_configuration(self, client):
+        response = client.post("/api/llm/test", json={})
+        assert response.status_code == 400
+        assert response.get_json()["code"] == "llm_not_configured"
+
+    def test_frontend_contains_security_and_evidence_controls(self, app):
+        page = app.test_client().get("/")
+        assert page.status_code == 200
+        html = page.get_data(as_text=True)
+        assert 'id="accountSettingsOverlay"' in html
+        assert 'id="llmSettingsTest"' in html
+        assert 'id="dataNoticeBanner"' in html
 
     def test_llm_status(self, client):
         resp = client.get("/api/llm/status")

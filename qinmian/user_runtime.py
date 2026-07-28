@@ -96,3 +96,8 @@ class UserRuntimeStoreManager:
                     temp_path = Path(temp_name)
                     if temp_path.exists():
                         temp_path.unlink()
+
+    def forget(self, user_id: str) -> None:
+        """Drop an account's in-process runtime cache."""
+        with self._lock:
+            self._stores.pop(user_id, None)

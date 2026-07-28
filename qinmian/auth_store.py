@@ -6,6 +6,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import tempfile
 import threading
 import time
@@ -82,6 +83,17 @@ def user_data_path(user_id: str) -> Path:
         raise ValueError("invalid user data path")
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def delete_user_data(user_id: str) -> None:
+    """Remove one local user's private directory after strict path validation."""
+    if not _USER_ID_RE.fullmatch(str(user_id or "")):
+        raise ValueError("invalid user id")
+    path = (USER_DATA_DIR / user_id).resolve()
+    if path.parent != USER_DATA_DIR.resolve():
+        raise ValueError("invalid user data path")
+    if path.exists():
+        shutil.rmtree(path)
 
 
 def load_or_create_session_secret() -> str:
@@ -209,3 +221,50 @@ class UserStore:
             if not user or not check_password_hash(str(user.get("password_hash", "")), password_text):
                 return None
             return self.public_user(user)
+
+    def change_password(
+        self,
+        user_id: str,
+        current_password: Any,
+        new_password: Any,
+    ) -> bool:
+        """Verify the current password and replace its hash."""
+        current_text = str(current_password or "")
+        new_text = str(new_password or "")
+        validate_password(new_text)
+        if secrets.compare_digest(current_text, new_text):
+            raise ValueError("新密码不能与当前密码相同")
+        with _LOCK:
+            user = next(
+                (
+                    row for row in self._users
+                    if secrets.compare_digest(str(row.get("id", "")), str(user_id or ""))
+                ),
+                None,
+            )
+            if not user or not check_password_hash(
+                str(user.get("password_hash", "")),
+                current_text,
+            ):
+                return False
+            user["password_hash"] = generate_password_hash(new_text)
+            user["password_changed_at"] = _timestamp()
+            self._save()
+            return True
+
+    def delete_account(self, user_id: str, password: Any) -> bool:
+        """Verify the password and remove one account from the registry."""
+        password_text = str(password or "")
+        with _LOCK:
+            for index, user in enumerate(self._users):
+                if not secrets.compare_digest(str(user.get("id", "")), str(user_id or "")):
+                    continue
+                if not check_password_hash(
+                    str(user.get("password_hash", "")),
+                    password_text,
+                ):
+                    return False
+                self._users.pop(index)
+                self._save()
+                return True
+        return False
