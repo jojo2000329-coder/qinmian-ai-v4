@@ -18,11 +18,18 @@ class CareerPlanner:
         if not selected_major:
             selected_major = ranked_majors[0]["major"] if ranked_majors else self.store.majors[0]
         curriculum = self.store.curriculum_for(selected_major["id"])
+        program_years = self.store.program_years_for(selected_major)
         semester_count = self._semester_count(selected_major)
         semesters = self._build_semesters(
             curriculum["courses"],
             role,
             semester_count,
+            selected_major,
+            role_name,
+        )
+        academic_years, planning_periods = self._build_academic_years(
+            semesters,
+            program_years,
             selected_major,
             role_name,
         )
@@ -45,9 +52,18 @@ class CareerPlanner:
             "elective_keywords": role.get("elective_keywords", []),
             "milestones": milestones,
             "salary_range": role.get("salary_range", ""),
+            "program_years": program_years,
             "semester_count": semester_count,
+            "regular_semester_count": semester_count,
+            "summer_term_count": max(0, program_years - 1),
+            "planning_period_count": len(planning_periods),
             "semesters": semesters,
-            "planning_note": "培养方案课程来自当前数据；“规划建议”是职业能力补充项（0 学分），请以学院最终培养方案为准。",
+            "planning_periods": planning_periods,
+            "academic_years": academic_years,
+            "planning_note": (
+                "每学年前两学期对应培养方案正式学期；非毕业学年的第3学期为小学期职业增强建议，"
+                "不冒充学校正式课程且按 0 学分展示。具体安排请以学院和教务系统为准。"
+            ),
         }
 
     def _match_role(self, career: str) -> tuple[str, dict[str, Any]]:
@@ -242,10 +258,160 @@ class CareerPlanner:
             )
         return semesters
 
+    @staticmethod
+    def _year_label(year: int) -> str:
+        labels = {
+            1: "大一",
+            2: "大二",
+            3: "大三",
+            4: "大四",
+            5: "大五",
+            6: "大六",
+        }
+        return labels.get(year, f"第{year}学年")
+
+    def _build_academic_years(
+        self,
+        semesters: list[dict[str, Any]],
+        program_years: int,
+        major: dict[str, Any],
+        role_name: str,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Group formal semesters by year and insert non-credit summer mini-terms."""
+        by_number = {int(item["semester"]): item for item in semesters}
+        academic_years: list[dict[str, Any]] = []
+        planning_periods: list[dict[str, Any]] = []
+        period_index = 0
+        major_name = major.get("display_name") or major.get("name") or "本专业"
+
+        for year in range(1, program_years + 1):
+            year_label = self._year_label(year)
+            periods: list[dict[str, Any]] = []
+            for term in (1, 2):
+                official_semester = (year - 1) * 2 + term
+                base = dict(by_number.get(official_semester, {
+                    "semester": official_semester,
+                    "credits": 0,
+                    "courses": [],
+                    "official_course_count": 0,
+                    "suggested_course_count": 0,
+                    "focus": "以学院最新培养方案为准",
+                }))
+                period_index += 1
+                base.update({
+                    "period_index": period_index,
+                    "year": year,
+                    "year_label": year_label,
+                    "term": term,
+                    "term_type": "regular",
+                    "official_semester": official_semester,
+                    "label": f"{year_label} · 第{term}学期",
+                    "short_label": f"第{term}学期",
+                })
+                periods.append(base)
+                planning_periods.append(base)
+
+            # 毕业学年不再虚构第3学期；此前学年增加明确标注的小学期规划。
+            if year < program_years:
+                period_index += 1
+                summer_courses = self._summer_suggestions(
+                    year,
+                    program_years,
+                    major_name,
+                    role_name,
+                )
+                summer = {
+                    "semester": None,
+                    "period_index": period_index,
+                    "year": year,
+                    "year_label": year_label,
+                    "term": 3,
+                    "term_type": "summer",
+                    "official_semester": None,
+                    "label": f"{year_label} · 第3学期（小学期）",
+                    "short_label": "第3学期（小学期）",
+                    "credits": 0,
+                    "courses": summer_courses,
+                    "official_course_count": 0,
+                    "suggested_course_count": len(summer_courses),
+                    "focus": self._summer_focus(year, program_years),
+                }
+                periods.append(summer)
+                planning_periods.append(summer)
+
+            academic_years.append({
+                "year": year,
+                "label": year_label,
+                "is_graduation_year": year == program_years,
+                "period_indexes": [period["period_index"] for period in periods],
+            })
+
+        return academic_years, planning_periods
+
+    def _summer_suggestions(
+        self,
+        year: int,
+        program_years: int,
+        major_name: str,
+        role_name: str,
+    ) -> list[dict[str, Any]]:
+        if year == 1:
+            rows = [
+                ("建议：专业认知调研", f"走访学院、实验室或行业单位，验证对{major_name}的理解"),
+                ("建议：基础工具训练营", "集中补齐数据处理、检索、写作或专业软件基础"),
+                ("建议：低门槛学科竞赛", "用小型团队任务检验兴趣与协作方式"),
+                ("建议：志愿服务与社会实践", "积累真实情境中的沟通、责任和执行证据"),
+                ("建议：大一学习复盘", "复盘前两学期并制定下一学年的能力清单"),
+            ]
+        elif year == 2:
+            rows = [
+                (f"建议：{role_name}岗位体验", "通过企业开放日、访谈或短期见习了解真实工作"),
+                ("建议：专业项目实训", "完成一个可运行、可展示、可复盘的小型项目"),
+                ("建议：科研或竞赛入门", "加入导师课题组或参加与专业相关的竞赛"),
+                ("建议：专业英语与资料阅读", "阅读岗位文档、行业报告或基础论文"),
+                ("建议：作品集阶段整理", "记录问题、过程、个人贡献和结果证据"),
+            ]
+        elif year < program_years - 1:
+            rows = [
+                (f"建议：{role_name}方向实习", "用真实任务验证职业匹配度并记录能力缺口"),
+                ("建议：高阶项目或科研实践", "完成一项与目标岗位直接相关的综合成果"),
+                ("建议：行业导师访谈", "请从业者评估课程、项目和求职准备"),
+                ("建议：资格与能力证明准备", "按专业需求准备证书、考试或公开成果"),
+                ("建议：毕业方向预研", "提前确定毕业论文、设计或长期实践方向"),
+            ]
+        else:
+            rows = [
+                (f"建议：{role_name}长期实习", "承担连续任务并沉淀可验证的岗位能力证据"),
+                ("建议：毕业成果预研", "提前完成选题、资料、方案或实验准备"),
+                ("建议：求职与升学材料定稿", "完善简历、作品集、推荐材料与备选方案"),
+                ("建议：专业资格准备", "按行业或执业要求安排考试与能力训练"),
+                ("建议：毕业学年风险复核", "核对学分、实践、毕业审核和关键时间节点"),
+            ]
+
+        return [
+            self._suggested_course(
+                name,
+                None,
+                note,
+                f"career-summer-{year}-{index}",
+            )
+            for index, (name, note) in enumerate(rows)
+        ]
+
+    @staticmethod
+    def _summer_focus(year: int, program_years: int) -> str:
+        if year == 1:
+            return "认知调研、基础训练与社会实践"
+        if year == 2:
+            return "岗位体验、项目实训与竞赛科研"
+        if year < program_years - 1:
+            return "方向实习、高阶项目与毕业预研"
+        return "长期实习、毕业预研与去向准备"
+
     def _suggested_course(
         self,
         name: str,
-        semester: int,
+        semester: int | None,
         note: str,
         course_id: str,
     ) -> dict[str, Any]:

@@ -180,6 +180,8 @@ class LLMClient:
             "不要编造未提供的培养方案、教师或教务信息。遇到模板数据要明确说是模板/演示数据。"
             "当结果包含多门课程、多个学期、多个教师或多个比较项时，必须先给结论，再使用标准 Markdown 表格展示关键字段；"
             "课程规划表至少包含学期、课程、学分、类别和学习重点，表格后再给出结合用户问题的个性化分析。"
+            "职业画像若包含 planning_periods，必须按大一、大二等学年组织：非毕业学年可包含第3学期（小学期），"
+            "毕业学年只包含前两个正式学期；小学期必须明确是0学分职业增强建议，不能写成学校正式课程。"
             "不要使用纯文本竖线以外的伪表格，也不要把全部内容挤成一大段。"
             "如果用户只是寒暄或闲聊，可以自然、亲切地回应，不要硬讲专业信息。"
             "如果工具结果包含 ui_actions，说明页面会自动执行这些动作，你可以简短说明已经帮用户切到相应功能。"
@@ -205,6 +207,7 @@ class LLMClient:
                         "grounding": "structured_data_plus_knowledge_base",
                         "markdown_table_for_multi_item_results": True,
                         "preserve_all_factual_numbers": True,
+                        "career_plan_grouping": "academic_years_with_summer_terms_except_graduation_year",
                     },
                 },
                 ensure_ascii=False,

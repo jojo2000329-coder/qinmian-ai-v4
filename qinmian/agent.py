@@ -37,6 +37,7 @@ class ConversationMemory:
         self.last_course: str | None = None
         self.last_major_id: str | None = None
         self.last_teacher: str | None = None
+        self.last_career: str | None = None
         self.last_intent: str | None = None
         self.mentioned_courses: list[str] = []  # 对话中提及过的所有课程
         self.mentioned_majors: list[str] = []  # 对话中提及过的所有专业
@@ -76,6 +77,10 @@ class ConversationMemory:
             if teacher:
                 self.last_teacher = teacher
 
+            career = data.get("matched_role") or data.get("career") or ""
+            if intent == "career_plan" and career:
+                self.last_career = str(career)
+
             # 如果 data 中有显式的 course 字段（来自 hardness 分析）
             if "dimensions" in data and data.get("name"):
                 cname = data["name"]
@@ -103,6 +108,7 @@ class ConversationMemory:
             "last_course": self.last_course,
             "last_major_id": self.last_major_id,
             "last_teacher": self.last_teacher,
+            "last_career": self.last_career,
             "last_intent": self.last_intent,
             "mentioned_courses": self.mentioned_courses[-5:],  # 最近5个
             "mentioned_majors": self.mentioned_majors[-3:],
@@ -210,6 +216,19 @@ class QinmianAgent:
 
         # 如果上一轮是 hardness 查询，且现在用户只说了课程名+"呢"，延续 hardness 意图
         last_intent = self.memory.last_intent
+        career_followup = (
+            last_intent == "career_plan"
+            and any(
+                word in msg
+                for word in [
+                    "大一", "大二", "大三", "大四", "大五",
+                    "第1学期", "第2学期", "第3学期", "小学期",
+                    "暑期", "实习", "项目", "怎么安排", "怎么规划", "那接下来",
+                ]
+            )
+            and not self._mentions_teacher_request(msg)
+            and not self._mentions_credit(msg)
+        )
         course_only_followup = (
             last_intent == "course_hardness"
             and not self._is_small_talk(msg)
@@ -309,8 +328,8 @@ class QinmianAgent:
                 "suggestions": self._credit_suggestions(data),
                 "ui_actions": ui_actions,
             }, major_id))
-        if self._mentions_career_plan(msg):
-            career = self._extract_role(msg)
+        if self._mentions_career_plan(msg) or career_followup:
+            career = self._extract_role(msg) or self.memory.last_career
             # 如果没提取到具体岗位，根据专业自动推断
             if not career and major_id:
                 major = self.store.get_major(major_id)
@@ -595,7 +614,11 @@ class QinmianAgent:
         if any(word in msg for word in ["该专业", "这个专业", "课程规划", "课程安排"]):
             return False
         return (any(role in msg for role in role_names)
-                or any(word in msg for word in ["岗位", "职业画像", "四年课表", "4年课表", "职业课表", "职业规划", "路线"])
+                or any(word in msg for word in [
+                    "岗位", "职业画像", "未来职业", "四年课表", "4年课表",
+                    "五年职业课表", "5年职业课表", "职业课表", "职业规划",
+                    "生涯规划", "职业路线", "路线",
+                ])
                 or (("课表" in msg) and ("四年" in msg or "4年" in msg or "职业" in msg or "岗位" in msg or any(role in msg for role in role_names))))
 
     def _mentions_curriculum(self, msg: str) -> bool:
@@ -1297,7 +1320,38 @@ class QinmianAgent:
             else "当前专业已完成匹配评估"
         )
         core_courses = "、".join(data["must_courses"][:6]) or "以当前专业培养方案为基础动态补充"
-        return f"我把你的目标识别为“{data['matched_role']}”。{fit_text}。建议优先看：{top_majors}。当前按 {major['display_name']} 生成 {data['semester_count']} 学期路线，核心课包括：{core_courses}。"
+        program_years = int(data.get("program_years") or self.store.program_years_for(major))
+        planning_periods = data.get("planning_periods") or data.get("semesters") or []
+        parts = [
+            f"## {data['matched_role']}职业画像与学习路线",
+            "",
+            f"- **当前专业：** {major['display_name']}",
+            f"- **专业匹配：** {fit_text}",
+            f"- **路线结构：** {program_years} 学年，共 {len(planning_periods)} 个规划阶段；"
+            f"其中 {data.get('regular_semester_count', data.get('semester_count', 0))} 个正式学期，"
+            f"{data.get('summer_term_count', 0)} 个小学期",
+            f"- **更匹配专业参考：** {top_majors}",
+            f"- **岗位核心能力课程：** {core_courses}",
+            "",
+            "| 学年 | 学期 / 阶段 | 代表性课程或任务 | 学分 | 数据性质 |",
+            "|---|---|---|---:|---|",
+        ]
+        for period in planning_periods:
+            courses = period.get("courses") or []
+            course_names = "、".join(str(item.get("name", "")) for item in courses[:4]) or "待结合个人情况安排"
+            if len(courses) > 4:
+                course_names += f"等 {len(courses)} 项"
+            is_summer = period.get("term_type") == "summer"
+            parts.append(
+                f"| {period.get('year_label', '')} | {period.get('short_label') or period.get('label', '')} | "
+                f"{course_names.replace('|', '｜')} | {period.get('credits', 0)} | "
+                f"{'小学期职业增强建议' if is_summer else '培养方案 + 职业补充'} |"
+            )
+        parts.extend([
+            "",
+            "> 小学期内容是 0 学分职业规划建议，不代表学校正式开课；最终以学院培养方案和教务系统为准。",
+        ])
+        return "\n".join(parts)
 
     def _program_semester_count(self, major: dict[str, Any]) -> int:
         return self.store.program_years_for(major) * 2
@@ -1403,17 +1457,17 @@ class QinmianAgent:
         major = data.get("selected_major", {})
         major_name = major.get("name") or major.get("display_name") or "当前专业"
         role_name = data.get("matched_role") or data.get("career") or "目标岗位"
-        semester_count = int(data.get("semester_count") or self._program_semester_count(major))
+        program_years = int(data.get("program_years") or self.store.program_years_for(major))
         if self._is_medical_major(major):
             return [
-                f"{major_name}第9-{semester_count}学期临床实践安排",
+                f"{major_name}大五临床实践与毕业衔接怎么安排",
                 f"{role_name}需要哪些执业与实践能力",
-                f"{major_name}毕业学分体检",
+                f"{major_name}大四小学期适合做什么实践",
             ]
         return [
             f"{role_name}还需要补哪些核心能力",
-            f"{major_name}第5-{semester_count}学期项目怎么安排",
-            f"{major_name}毕业学分体检",
+            f"{major_name}大三项目和小学期怎么安排",
+            f"{major_name}大{['一','二','三','四','五','六'][program_years - 1]}毕业学年怎么规划",
         ]
 
     def _extract_year(self, msg: str) -> int | None:

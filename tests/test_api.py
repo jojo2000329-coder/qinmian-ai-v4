@@ -526,6 +526,74 @@ class TestPost:
         assert data["salary_range"]
         assert data["planning_note"]
         assert all(len(semester["courses"]) >= 5 for semester in data["semesters"])
+        assert data["program_years"] == 4
+        assert data["regular_semester_count"] == 8
+        assert data["summer_term_count"] == 3
+        assert data["planning_period_count"] == 11
+        assert len(data["academic_years"]) == 4
+        assert [len(year["period_indexes"]) for year in data["academic_years"]] == [3, 3, 3, 2]
+        assert len(data["planning_periods"]) == 11
+        summer_periods = [
+            period for period in data["planning_periods"]
+            if period["term_type"] == "summer"
+        ]
+        assert len(summer_periods) == 3
+        assert all(period["credits"] == 0 for period in summer_periods)
+        assert all(
+            course["origin"] == "career"
+            for period in summer_periods
+            for course in period["courses"]
+        )
+
+    def test_five_year_career_plan_groups_terms_as_three_plus_final_two(self, client):
+        resp = client.post(
+            "/api/plan",
+            json={"career": "临床医生", "major_id": "hqu-2026-qz-med-clinical"},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["program_years"] == 5
+        assert data["regular_semester_count"] == 10
+        assert data["summer_term_count"] == 4
+        assert data["planning_period_count"] == 14
+        assert [len(year["period_indexes"]) for year in data["academic_years"]] == [3, 3, 3, 3, 2]
+        fourth_year_indexes = set(data["academic_years"][3]["period_indexes"])
+        fifth_year_indexes = set(data["academic_years"][4]["period_indexes"])
+        assert any(
+            period["short_label"] == "第3学期（小学期）"
+            for period in data["planning_periods"]
+            if period["period_index"] in fourth_year_indexes
+        )
+        assert all(
+            period["term_type"] != "summer"
+            for period in data["planning_periods"]
+            if period["period_index"] in fifth_year_indexes
+        )
+
+    def test_career_chat_followup_keeps_role_and_understands_academic_year(self, client):
+        first = client.post(
+            "/api/chat",
+            json={"message": "算法工程师职业画像", "context": {}},
+        )
+        assert first.status_code == 200
+        first_data = first.get_json()
+        assert first_data["intent"] == "career_plan"
+        conversation_id = first_data["conversation_id"]
+
+        followup = client.post(
+            "/api/chat",
+            json={
+                "message": "那大二第3学期怎么安排",
+                "conversation_id": conversation_id,
+                "context": {},
+            },
+        )
+        assert followup.status_code == 200
+        followup_data = followup.get_json()
+        assert followup_data["intent"] == "career_plan"
+        assert followup_data["data"]["matched_role"] == "算法工程师"
+        assert "大二" in followup_data["answer"]
+        assert "第3学期（小学期）" in followup_data["answer"]
 
     def test_plan_evaluates_every_major_and_enriches_each_semester(self, client):
         majors = client.get("/api/majors").get_json()
@@ -607,7 +675,15 @@ class TestPost:
         assert resp.data.startswith(signature)
         assert "attachment" in resp.headers["Content-Disposition"]
 
-    def test_career_plan_docx_export(self, client):
+    @pytest.mark.parametrize(
+        ("export_format", "signature"),
+        [
+            ("docx", b"PK"),
+            ("pdf", b"%PDF"),
+            ("xls", b"\xd0\xcf\x11\xe0"),
+        ],
+    )
+    def test_career_plan_export_formats(self, client, export_format, signature):
         plan = client.post(
             "/api/plan",
             json={"career": "临床医生", "major_id": "hqu-2026-qz-med-clinical"},
@@ -616,13 +692,13 @@ class TestPost:
             "/api/exports",
             json={
                 "kind": "career_plan",
-                "format": "docx",
+                "format": export_format,
                 "title": "临床医学五年课表",
                 "data": plan,
             },
         )
         assert resp.status_code == 200
-        assert resp.data.startswith(b"PK")
+        assert resp.data.startswith(signature)
 
     def test_not_found(self, client):
         resp = client.get("/api/nonexistent")

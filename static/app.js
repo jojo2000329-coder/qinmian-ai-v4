@@ -1098,10 +1098,23 @@ function renderTimetableFromPlan(data) {
   const roleName = escapeHtml(data.matched_role || "目标岗位");
   const majorName = escapeHtml(data.selected_major?.display_name || "");
   const salary = data.salary_range || "";
+  const planningPeriods = data.planning_periods?.length ? data.planning_periods : (data.semesters || []);
+  const academicYears = data.academic_years?.length
+    ? data.academic_years.map((year) => ({
+        ...year,
+        periods: year.periods?.length
+          ? year.periods
+          : (year.period_indexes || [])
+              .map((periodIndex) => planningPeriods.find((period) => period.period_index === periodIndex))
+              .filter(Boolean),
+      }))
+    : [{ year: 1, label: "学习路线", periods: planningPeriods }];
+  const firstPeriods = academicYears[0]?.periods || [];
   let html = `<div class="career-overview">`;
   html += `<span class="career-overview-item">🎯 岗位：<strong>${roleName}</strong></span>`;
   html += `<span class="career-overview-item">🏛 专业：<strong>${majorName}</strong></span>`;
-  html += `<span class="career-overview-item">📚 ${data.semester_count} 学期路线</span>`;
+  html += `<span class="career-overview-item">📚 ${data.program_years || academicYears.length} 学年 · ${data.planning_period_count || planningPeriods.length} 个规划阶段</span>`;
+  html += `<span class="career-overview-item">🏫 ${data.regular_semester_count || data.semester_count || 0} 个正式学期 + ${data.summer_term_count || 0} 个小学期</span>`;
   if (salary) html += `<span class="career-overview-item">💰 薪资参考：<strong>${salary}</strong></span>`;
   html += `</div>`;
   html += evidenceNotice(data);
@@ -1122,15 +1135,21 @@ function renderTimetableFromPlan(data) {
       return `<span>${escapeHtml(row.major?.display_name || "")} ${percent}%</span>`;
     }).join("")}</div>`;
   }
-  html += `<div class="semester-tabs" id="semesterTabs">`;
-  for (let i = 0; i < data.semesters.length; i++) {
-    const sem = data.semesters[i];
-    html += `<button class="semester-tab${i === 0 ? " active" : ""}" data-index="${i}">${sem.label}</button>`;
+  html += `<div class="semester-tabs academic-year-tabs" id="careerYearTabs">`;
+  for (let i = 0; i < academicYears.length; i++) {
+    const year = academicYears[i];
+    html += `<button class="semester-tab${i === 0 ? " active" : ""}" data-year-index="${i}">${escapeHtml(year.label)}</button>`;
+  }
+  html += `</div>`;
+  html += `<div class="semester-tabs career-term-tabs" id="careerTermTabs">`;
+  for (let i = 0; i < firstPeriods.length; i++) {
+    const period = firstPeriods[i];
+    html += `<button class="semester-tab${i === 0 ? " active" : ""}${period.term_type === "summer" ? " summer" : ""}" data-period-index="${i}">${escapeHtml(period.short_label || period.label)}</button>`;
   }
   html += `</div>`;
   html += `<div id="semesterTimetable">`;
-  if (data.semesters.length > 0) {
-    html += renderSingleSemesterView(data.semesters[0]);
+  if (firstPeriods.length > 0) {
+    html += renderSingleSemesterView(firstPeriods[0]);
   }
   html += `</div>`;
   html += `<div class="career-plan-details">`;
@@ -1151,16 +1170,45 @@ function renderTimetableFromPlan(data) {
   if (data.planning_note) html += `<p class="career-planning-note">说明：${escapeHtml(data.planning_note)}</p>`;
   html += `</div>`;
   setTimeout(() => {
-    const tabs = document.querySelectorAll("#semesterTabs .semester-tab");
-    for (const tab of tabs) {
+    const yearTabs = document.querySelectorAll("#careerYearTabs .semester-tab");
+    const termContainer = document.getElementById("careerTermTabs");
+    const timetable = document.getElementById("semesterTimetable");
+
+    const bindTermTabs = (periods) => {
+      const termTabs = document.querySelectorAll("#careerTermTabs .semester-tab");
+      for (const tab of termTabs) {
+        tab.addEventListener("click", function() {
+          termTabs.forEach(t => t.classList.remove("active"));
+          this.classList.add("active");
+          const period = periods[parseInt(this.dataset.periodIndex, 10)];
+          if (period && timetable) timetable.innerHTML = renderSingleSemesterView(period);
+        });
+      }
+    };
+
+    const renderYear = (yearIndex) => {
+      const periods = academicYears[yearIndex]?.periods || [];
+      if (termContainer) {
+        termContainer.innerHTML = periods.map((period, index) =>
+          `<button class="semester-tab${index === 0 ? " active" : ""}${period.term_type === "summer" ? " summer" : ""}" data-period-index="${index}">${escapeHtml(period.short_label || period.label)}</button>`
+        ).join("");
+      }
+      if (timetable) {
+        timetable.innerHTML = periods.length
+          ? renderSingleSemesterView(periods[0])
+          : `<div class="empty-state">该学年暂无规划数据。</div>`;
+      }
+      bindTermTabs(periods);
+    };
+
+    for (const tab of yearTabs) {
       tab.addEventListener("click", function() {
-        tabs.forEach(t => t.classList.remove("active"));
+        yearTabs.forEach(t => t.classList.remove("active"));
         this.classList.add("active");
-        const idx = parseInt(this.dataset.index);
-        const sem = data.semesters[idx];
-        document.getElementById("semesterTimetable").innerHTML = renderSingleSemesterView(sem);
+        renderYear(parseInt(this.dataset.yearIndex, 10));
       });
     }
+    bindTermTabs(firstPeriods);
   }, 0);
   return html;
 }
@@ -1172,7 +1220,8 @@ function renderSingleSemesterView(sem) {
   const composition = sem.suggested_course_count
     ? ` · ${sem.official_course_count || 0} 门培养方案课程 + ${sem.suggested_course_count} 项规划建议`
     : "";
-  html += `<div class="timetable-header"><h3>📅 ${escapeHtml(sem.label)}</h3><span class="credits-badge">${sem.credits} 学分${composition} · ${escapeHtml(sem.focus || "")}</span></div>`;
+  const periodType = sem.term_type === "summer" ? " · 小学期规划（非正式课程）" : "";
+  html += `<div class="timetable-header"><h3>📅 ${escapeHtml(sem.label)}</h3><span class="credits-badge">${sem.credits} 学分${composition}${periodType} · ${escapeHtml(sem.focus || "")}</span></div>`;
   html += `<div class="timetable-week-grid">`;
   html += `<div class="timetable-day-header">时间</div>`;
   for (const d of days) html += `<div class="timetable-day-header">${d}</div>`;
@@ -1230,20 +1279,22 @@ async function exportCareerPlan() {
   }
   const format = $("#careerExportFormat")?.value || "csv";
   const rows = [
-    ["目标岗位", "当前专业", "匹配度", "匹配结论", "学期", "课程/建议", "类别", "学分", "来源", "说明"],
+    ["目标岗位", "当前专业", "匹配度", "匹配结论", "学年", "学期/阶段", "课程/建议", "类别", "学分", "来源", "说明"],
   ];
-  for (const semester of data.semesters) {
-    for (const course of semester.courses || []) {
+  const periods = data.planning_periods?.length ? data.planning_periods : data.semesters;
+  for (const period of periods) {
+    for (const course of period.courses || []) {
       rows.push([
         data.matched_role || data.career || "",
         data.selected_major?.display_name || "",
         `${data.selected_major_fit?.score || 0}%`,
         data.selected_major_fit?.level || "",
-        semester.label,
+        period.year_label || "",
+        period.short_label || period.label,
         course.name || "",
         course.category || "",
         course.credits ?? 0,
-        course.origin === "career" ? "职业规划建议" : "培养方案",
+        period.term_type === "summer" ? "小学期职业规划建议" : (course.origin === "career" ? "职业规划建议" : "培养方案"),
         course.planning_note || "",
       ]);
     }
@@ -2747,8 +2798,8 @@ async function deleteAiMessage(msgIndex) {
  */
 function renderCareerPlanExtra(response) {
   const data = response.data || {};
-  const semesters = data.semesters;
-  if (!semesters || !Array.isArray(semesters) || semesters.length === 0) return "";
+  const periods = data.planning_periods?.length ? data.planning_periods : data.semesters;
+  if (!periods || !Array.isArray(periods) || periods.length === 0) return "";
 
   const matchedRole = escapeHtml(data.matched_role || "目标岗位");
   const majorName = escapeHtml(data.selected_major?.display_name || "");
@@ -2757,11 +2808,11 @@ function renderCareerPlanExtra(response) {
   html += `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">`;
   html += `<span style="font-size:12px;color:#94a3b8">🎯 <strong style="color:#e2e8f0">${matchedRole}</strong></span>`;
   html += `<span style="font-size:12px;color:#94a3b8">🏛 <strong style="color:#e2e8f0">${majorName}</strong></span>`;
-  html += `<span style="font-size:12px;color:#94a3b8">📚 ${semesters.length} 学期</span>`;
+  html += `<span style="font-size:12px;color:#94a3b8">📚 ${data.program_years || ""} 学年 · ${periods.length} 个规划阶段</span>`;
   if (data.salary_range) html += `<span style="font-size:12px;color:#94a3b8">💰 <strong style="color:#22c55e">${data.salary_range}</strong></span>`;
   html += `</div>`;
 
-  for (const sem of semesters) {
+  for (const sem of periods) {
     const credits = sem.credits || 0;
     const courses = sem.courses || [];
     html += `<div style="background:rgba(14,165,233,0.04);border:1px solid rgba(14,165,233,0.1);border-radius:8px;margin-bottom:6px;overflow:hidden;">`;

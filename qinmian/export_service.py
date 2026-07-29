@@ -40,17 +40,19 @@ def _conversation_rows(payload: dict[str, Any]) -> list[list[str]]:
 
 def _career_rows(payload: dict[str, Any]) -> list[list[Any]]:
     rows: list[list[Any]] = [
-        ["目标岗位", "当前专业", "匹配度", "匹配结论", "学期", "课程/建议", "类别", "学分", "来源", "说明"]
+        ["目标岗位", "当前专业", "匹配度", "匹配结论", "学年", "学期/阶段", "课程/建议", "类别", "学分", "来源", "说明"]
     ]
     role = _clean_text(payload.get("matched_role") or payload.get("career"))
     major = payload.get("selected_major") or {}
     major_name = _clean_text(major.get("display_name") or major.get("name"))
     fit = payload.get("selected_major_fit") or {}
-    for semester in payload.get("semesters", [])[:20]:
-        if not isinstance(semester, dict):
+    periods = payload.get("planning_periods") or payload.get("semesters") or []
+    for period in periods[:24]:
+        if not isinstance(period, dict):
             continue
-        semester_label = _clean_text(semester.get("label"))
-        for course in semester.get("courses", [])[:100]:
+        year_label = _clean_text(period.get("year_label"))
+        period_label = _clean_text(period.get("short_label") or period.get("label"))
+        for course in period.get("courses", [])[:100]:
             if not isinstance(course, dict):
                 continue
             rows.append(
@@ -59,11 +61,18 @@ def _career_rows(payload: dict[str, Any]) -> list[list[Any]]:
                     major_name,
                     f"{fit.get('score', 0)}%",
                     _clean_text(fit.get("level")),
-                    semester_label,
+                    year_label,
+                    period_label,
                     _clean_text(course.get("name")),
                     _clean_text(course.get("category")),
                     course.get("credits", 0),
-                    "规划建议" if course.get("origin") == "career" else "培养方案",
+                    (
+                        "小学期职业规划建议"
+                        if period.get("term_type") == "summer"
+                        else "规划建议"
+                        if course.get("origin") == "career"
+                        else "培养方案"
+                    ),
                     _clean_text(course.get("planning_note")),
                 ]
             )
@@ -160,7 +169,7 @@ def _build_pdf(kind: str, title: str, payload: dict[str, Any]) -> io.BytesIO:
             [_pdf_paragraph(value, body_style, font_name) for value in row]
             for row in rows
         ]
-        widths = [52, 72, 42, 48, 42, 92, 50, 34, 54, 120]
+        widths = [48, 66, 38, 44, 32, 54, 84, 46, 30, 58, 106]
         table = Table(table_data, colWidths=widths, repeatRows=1, hAlign="CENTER")
         table.setStyle(
             TableStyle(

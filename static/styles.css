@@ -2908,6 +2908,29 @@ label span {
   color: #075985;
 }
 
+.academic-year-tabs {
+  margin-bottom: 8px;
+  background: rgba(14, 165, 233, 0.06);
+}
+
+.career-term-tabs {
+  margin-top: 0;
+  border-top: 1px dashed rgba(14, 165, 233, 0.18);
+  background: rgba(248, 250, 252, 0.78);
+}
+
+.career-term-tabs .semester-tab.summer {
+  border-color: rgba(245, 158, 11, 0.28);
+  color: #92400e;
+  background: rgba(254, 243, 199, 0.72);
+}
+
+.career-term-tabs .semester-tab.summer.active {
+  border-color: rgba(245, 158, 11, 0.56);
+  color: #78350f;
+  background: rgba(253, 230, 138, 0.84);
+}
+
 .career-overview {
   display: flex;
   gap: 16px;
