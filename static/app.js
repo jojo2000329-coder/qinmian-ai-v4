@@ -666,9 +666,10 @@ async function logout() {
 function initAccountSettings() {
   const overlay = $("#accountSettingsOverlay");
   const message = $("#accountSettingsMessage");
+  const passwordForm = $("#passwordChangeForm");
   const close = () => {
     overlay.hidden = true;
-    $("#passwordChangeForm").reset();
+    passwordForm.reset();
     $("#deleteAccountPassword").value = "";
     $("#deleteAccountConfirmation").value = "";
     message.textContent = "";
@@ -687,10 +688,11 @@ function initAccountSettings() {
     if (event.key === "Escape" && !overlay.hidden) close();
   });
 
-  $("#passwordChangeForm").addEventListener("submit", async (event) => {
+  passwordForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const button = event.submitter;
-    button.disabled = true;
+    const form = event.currentTarget;
+    const button = event.submitter || form.querySelector('button[type="submit"]');
+    if (button) button.disabled = true;
     message.textContent = "正在修改密码…";
     message.className = "account-settings-message";
     try {
@@ -702,14 +704,14 @@ function initAccountSettings() {
           new_password_confirm: $("#newPasswordConfirm").value,
         }),
       });
-      event.currentTarget.reset();
+      form.reset();
       message.textContent = "密码修改成功，下次登录请使用新密码。";
       message.className = "account-settings-message success";
     } catch (error) {
       message.textContent = error.message;
       message.className = "account-settings-message error";
     } finally {
-      button.disabled = false;
+      if (button) button.disabled = false;
     }
   });
 
