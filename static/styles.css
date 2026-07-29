@@ -2259,6 +2259,27 @@ label span {
   background: rgba(240, 249, 255, 0.96);
 }
 
+.answer-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  margin-top: 8px;
+  padding: 4px 9px;
+  border: 1px solid rgba(14, 165, 233, 0.2);
+  border-radius: 999px;
+  color: #075985;
+  background: rgba(224, 242, 254, 0.78);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+.answer-mode-badge.fallback {
+  border-color: rgba(245, 158, 11, 0.28);
+  color: #92400e;
+  background: rgba(254, 243, 199, 0.82);
+}
+
 .chat-message .ai-md-content {
   font-size: 13px;
 }

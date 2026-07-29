@@ -2144,7 +2144,13 @@ async function sendFloatingChat() {
       }),
     });
     rememberResponseContext(response);
-    replaceChatMessage(thinkingId, { role: "assistant", text: response.answer, suggestions: response.suggestions || [] });
+    replaceChatMessage(thinkingId, {
+      role: "assistant",
+      text: response.answer,
+      suggestions: response.suggestions || [],
+      answerMode: response.answer_mode,
+      grounding: response.grounding,
+    });
     // AI→Professor sync: 根据意图切换标签页
     if (state.activeTab === "professor" && !state.aiPageOpen) {
       await renderTab();
@@ -2152,7 +2158,11 @@ async function sendFloatingChat() {
     // AI全屏页面也同步该消息
     if (state.aiPageOpen) {
       state.aiConversation.push({ role: "user", content: `[悬浮框] ${message}` });
-      state.aiConversation.push({ role: "assistant", content: response.answer });
+      state.aiConversation.push({
+        role: "assistant",
+        content: response.answer,
+        extraHtml: renderAnswerModeBadge(response),
+      });
       renderAiMessages();
     }
   } catch (error) {
@@ -2187,6 +2197,7 @@ function chatBubble(item) {
     : escapeHtml(item.text || "").replace(/\n/g, "<br>");
   return `<div class="chat-message ${item.role} ${item.thinking ? "thinking" : ""}">
     <div>${item.thinking ? thinkingHtml(item.text) : displayText}</div>
+    ${item.role === "assistant" && !item.thinking ? renderAnswerModeBadge(item) : ""}
     ${item.suggestions?.length ? `<div class="suggestions">${item.suggestions.map((text) => `<button data-suggest="${escapeHtml(text)}">${escapeHtml(text)}</button>`).join("")}</div>` : ""}
   </div>`;
 }
@@ -2224,7 +2235,13 @@ async function sendChat() {
   try {
     const response = await api("/api/chat", { method: "POST", body: JSON.stringify({ message, context: chatContext() }) });
     rememberResponseContext(response);
-    replaceChatMessage(thinkingId, { role: "assistant", text: response.answer, suggestions: response.suggestions || [] });
+    replaceChatMessage(thinkingId, {
+      role: "assistant",
+      text: response.answer,
+      suggestions: response.suggestions || [],
+      answerMode: response.answer_mode,
+      grounding: response.grounding,
+    });
   } catch (error) {
     replaceChatMessage(thinkingId, { role: "assistant", text: `请求失败：${error.message}`, suggestions: ["再试一次", "检查大模型 API 配置"] });
   } finally {
@@ -2893,6 +2910,21 @@ async function handleFileUpload(file) {
   }
 }
 
+function renderAnswerModeBadge(response) {
+  const mode = response?.answer_mode || response?.answerMode || "";
+  const grounding = response?.grounding || {};
+  if (mode === "llm_knowledge_hybrid") {
+    const label = grounding.knowledge_base
+      ? "LLM + 知识库 + 结构化培养方案"
+      : "LLM + 结构化培养方案";
+    return `<div class="answer-mode-badge hybrid" title="回答由大模型综合检索证据和结构化数据生成">✓ ${label}</div>`;
+  }
+  if (mode === "knowledge_fallback") {
+    return `<div class="answer-mode-badge fallback" title="大模型未配置、被关闭或调用失败，当前展示可核验的本地数据">⚠ 知识库 / 培养方案降级回答</div>`;
+  }
+  return "";
+}
+
 async function exportAiConversation() {
   const messages = state.aiConversation || [];
   if (!messages.length) {
@@ -3005,12 +3037,23 @@ async function sendAiMessage() {
     const intent = response.intent || "";
 
     // 检查是否为课表规划结果 → 渲染完整学期时间线
-    const extraHtml = renderCareerPlanExtra(response);
+    const extraHtml = renderAnswerModeBadge(response) + renderCareerPlanExtra(response);
 
-    state.aiConversation.push({ role: "assistant", content: answer, extraHtml });
+    state.aiConversation.push({
+      role: "assistant",
+      content: answer,
+      extraHtml,
+      answerMode: response.answer_mode,
+      grounding: response.grounding,
+    });
     appendAiMessage("assistant", answer, suggestions, extraHtml);
     // 同步到浮动聊天
-    state.chat.push({ role: "assistant", text: `[AI助手] ${answer.slice(0, 200)}${answer.length > 200 ? "…" : ""}` });
+    state.chat.push({
+      role: "assistant",
+      text: `[AI助手] ${answer.slice(0, 200)}${answer.length > 200 ? "…" : ""}`,
+      answerMode: response.answer_mode,
+      grounding: response.grounding,
+    });
     renderFloatingChat();
 
     // AI→Professor sync: 根据意图切换标签页并设置筛选条件

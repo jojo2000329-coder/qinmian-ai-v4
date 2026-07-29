@@ -938,7 +938,7 @@ def api_chat():
     if kb_enabled and len(message.strip()) > 4:
         kb_context = knowledge_base.get_relevant_context(
             message,
-            max_items=3,
+            max_items=5,
             conversation_id=conv_id,
         )
 
@@ -1012,7 +1012,7 @@ def api_chat_stream():
     if kb_enabled and len(message.strip()) > 4:
         kb_context = knowledge_base.get_relevant_context(
             message,
-            max_items=3,
+            max_items=5,
             conversation_id=conv_id,
         )
 
@@ -1092,6 +1092,7 @@ def _stream_local(
             time.sleep(0.05)
 
     yield _sse("result", {
+        **result,
         "intent": intent,
         "data": data,
         "answer": answer,
@@ -1145,9 +1146,13 @@ def _stream_with_agent(
         )
         system_prompt = (
             "你是华侨大学学业规划 AI「勤勉」。你可以使用以下工具来回答用户的问题。\n"
-            "工具会返回 JSON 结果，请根据结果用中文给出自然、清晰的回答。\n"
-            "不要编造未提供的数据。如果工具返回空结果，诚实地告诉用户。\n"
-            "回答要简短、清晰、适合学生继续追问。\n"
+            "必须把工具返回的结构化 JSON 与检索到的知识库上下文结合起来回答，不能只照抄其中一方。\n"
+            "工具中的专业、学制、课程、学分、学院和教师等事实优先级最高，所有数值必须保留。\n"
+            "当结果包含多门课程、多个学期、多个教师或多个比较项时，必须使用标准 Markdown 表格；"
+            "课程规划表至少包含学期、课程、学分、类别和学习重点。\n"
+            "表格后要结合用户问题给出个性化分析，不要输出固定模板式长段落。\n"
+            "不要编造未提供的数据；知识库与工具冲突时以结构化工具数据为准，并说明需以学院最新培养方案复核。\n"
+            "回答要分层、清晰、适合学生继续追问。\n"
             f"{memory_section}"
         )
 
@@ -1196,7 +1201,15 @@ def _stream_with_agent(
                             "input": str(tool_input)[:200],
                         })
 
-        yield _sse("result", {"answer": full_answer})
+        yield _sse("result", {
+            "answer": full_answer,
+            "answer_mode": "llm_knowledge_hybrid",
+            "grounding": {
+                "structured_data": True,
+                "knowledge_base": bool(kb_context),
+                "llm": True,
+            },
+        })
 
         if context.get("knowledge_base_enabled"):
             knowledge_base.store(

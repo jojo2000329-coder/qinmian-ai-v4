@@ -382,11 +382,18 @@ class QinmianAgent:
             response["llm"] = llm_client.status()
             response["llm"]["used"] = False
             response["llm"]["reason"] = "disabled_for_user"
+            response["answer_mode"] = "knowledge_fallback"
+            response["grounding"] = {
+                "structured_data": True,
+                "knowledge_base": bool(request_context.get("long_term_memory")),
+                "llm": False,
+            }
             return response
         if self._should_keep_exact_answer(response):
             response["llm"] = llm_client.status()
             response["llm"]["used"] = False
             response["llm"]["reason"] = "exact_local_data"
+            response["answer_mode"] = "knowledge_fallback"
             return response
         major = self.store.get_major(major_id) if major_id and include_major_context else None
         return llm_client.enhance_answer(
@@ -525,16 +532,7 @@ class QinmianAgent:
         return suggestions
 
     def _should_keep_exact_answer(self, response: dict[str, Any]) -> bool:
-        if response.get("intent") in {"curriculum", "credit_check"}:
-            data = response.get("data") or {}
-            rule = data.get("credit_rule") or {}
-            return bool(rule) and not rule.get("is_template", True)
-        if response.get("intent") not in {"teacher_roster_lookup", "faculty_profile_lookup", "course_teachers"}:
-            return False
-        data = response.get("data") or {}
-        if data.get("courses"):
-            return True
-        return any(teacher.get("majors") for teacher in data.get("teachers", []) if isinstance(teacher, dict))
+        return bool(response.get("preserve_exact_answer"))
 
     def _mentions_hot(self, msg: str) -> bool:
         return any(word in msg for word in ["热门", "最火", "前景", "推荐方向", "5个专业方向", "五个专业方向"])
@@ -1519,27 +1517,14 @@ class QinmianAgent:
         else:
             year_label = None
             semester_label = None
-            year_label = None
 
-        def course_desc(c):
-            name = c.get("name", "")
-            credits = c.get("credits", 0)
-            if name in course_library:
-                tip, stars = course_library[name]
-                return f"{name}（{credits}学分）{stars}\n     {tip}"
-            cat = c.get("category", "")
-            return f"{name}（{credits}学分，{cat}）"
-
-        # 构建回答（含人格风格）
+        # 构建可直接渲染的 Markdown 回答；即使 LLM 暂时不可用也保留清晰表格。
         persona_id = normalize_persona_id(getattr(self, "_persona_id", "diligent"))
         from .personas import PERSONAS
         p = PERSONAS.get(persona_id, PERSONAS["diligent"])
         persona_tag = f"[{p['name']}]"
-        parts = [f"🏛 【{major['display_name']}】专业分析 {persona_tag}"]
-        parts.append(f"所属学院：{major['college']}｜校区：{major['campus']}")
         duration_label = data.get("duration_label") or self.store.program_duration_label(major)
         semester_count = int(data.get("semester_count") or self._program_semester_count(major))
-        parts.append(f"学制：{duration_label}（共{semester_count}个学期）")
         DISPLAY_DISCIPLINES = {
             "computer": "计算机科学与技术",
             "software": "软件工程",
@@ -1566,15 +1551,23 @@ class QinmianAgent:
             "sports": "体育学",
         }
         disp = DISPLAY_DISCIPLINES.get(major.get('discipline', ''), major.get('discipline', '未分类'))
-        parts.append(f"学科门类：{disp}")
-        parts.append(f"毕业学分：{rule['graduation_total']}（{label}，{source_text}）{source_warning}")
+        parts = [
+            f"## {major['display_name']}课程规划 {persona_tag}",
+            "",
+            f"> **数据口径：** {source_text}；课程安排为规划参考，最终以学院最新培养方案为准。",
+            "",
+            f"- **学院 / 校区：** {major['college']} / {major['campus']}",
+            f"- 学制：{duration_label}（共{semester_count}个学期）",
+            f"- **学科门类：** {disp}",
+            f"- **毕业学分：** {rule['graduation_total']}（{label}）{source_warning}",
+        ]
 
         if semester_label:
-            parts.append(f"\n📅 【{semester_label}课程详情】")
+            parts.extend(["", f"### {semester_label}课程详情"])
         elif year_label:
-            parts.append(f"\n📅 【{year_label}课程规划】")
+            parts.extend(["", f"### {year_label}课程规划"])
         else:
-            parts.append("\n📅 【各学期完整课程规划】")
+            parts.extend(["", "### 各学期课程规划"])
 
         if semesters:
             display_semesters = (
@@ -1582,28 +1575,62 @@ class QinmianAgent:
                 if year_label or semester_label
                 else list(range(1, semester_count + 1))
             )
+            parts.extend([
+                "",
+                "| 学期 | 课程 | 学分 | 类别 | 学习重点 |",
+                "|---|---|---:|---|---|",
+            ])
             for sem in display_semesters:
                 if sem > semester_count:
                     continue
                 clist = semesters.get(sem, [])
-                parts.append(f"\n  ── 第{sem}学期（{len(clist)}门课）──")
                 if not clist:
                     if self._is_clinical_major(major) and sem == semester_count:
-                        parts.append("  临床实习延续、毕业考核与执业准备（具体安排以医学院最终培养方案为准）")
+                        parts.append(
+                            f"| 第{sem}学期 | 临床实习延续、毕业考核与执业准备 | - | 实践 | "
+                            "具体安排以医学院最终培养方案为准 |"
+                        )
                     else:
-                        parts.append("  当前数据未细分该学期课程，请以学院最新培养方案为准。")
+                        parts.append(
+                            f"| 第{sem}学期 | 当前数据未细分课程 | - | 待确认 | "
+                            "请查看学院最新培养方案 |"
+                        )
                     continue
                 for c in clist[:10]:
-                    parts.append(f"  {course_desc(c)}")
+                    name = str(c.get("name", "未命名课程")).replace("|", "｜")
+                    credits = c.get("credits", "-")
+                    category = str(c.get("category", "未分类")).replace("|", "｜")
+                    tip, stars = course_library.get(name, ("按课程大纲安排预习、复习与实践", ""))
+                    focus = f"{stars} {tip}".strip().replace("|", "｜").replace("\n", " ")
+                    parts.append(
+                        f"| 第{sem}学期 | {name} | {credits} | {category} | {focus} |"
+                    )
                 if len(clist) > 10:
-                    parts.append(f"  ...另有{len(clist)-10}门")
-            # 如果是按年级查询，补充小学期
+                    parts.append(
+                        f"| 第{sem}学期 | 另有 {len(clist) - 10} 门课程 | - | 其余课程 | "
+                        "可继续追问该学期完整清单 |"
+                    )
         else:
-            parts.append("  该年级暂无详细课程数据。")
+            parts.extend(["", "当前年级暂无可核验的详细课程数据。"])
 
-        parts.append("\n📋 【分类学分要求】")
+        parts.extend([
+            "",
+            "### 分类学分要求",
+            "",
+            "| 类别 | 要求学分 |",
+            "|---|---:|",
+        ])
         for cat_name, cat_val in rule.get("categories", {}).items():
-            parts.append(f"  {cat_name}：{cat_val}学分")
+            parts.append(f"| {str(cat_name).replace('|', '｜')} | {cat_val} |")
+
+        parts.extend([
+            "",
+            "### 规划建议",
+            "",
+            "- 先保证专业基础课和核心课的先修关系，再安排选修课与实践项目。",
+            "- 学期内课程数量和具体开课时间可能变化，请在选课前复核教务系统。",
+            "- 你可以继续告诉我目标方向、每周可投入时间或薄弱课程，我会进一步个性化调整。",
+        ])
 
         return "\n".join(parts)
 

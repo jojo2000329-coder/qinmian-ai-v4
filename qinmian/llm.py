@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -113,6 +114,15 @@ class LLMClient:
         local_response = dict(local_response)
         local_response["persona"] = public_persona(persona_id)
         if not self.api_key:
+            local_response["llm"] = self.status()
+            local_response["llm"]["used"] = False
+            local_response["llm"]["reason"] = "not_configured"
+            local_response["answer_mode"] = "knowledge_fallback"
+            local_response["grounding"] = {
+                "structured_data": True,
+                "knowledge_base": bool(long_term_memory),
+                "llm": False,
+            }
             return local_response
         try:
             answer = self.chat(
@@ -126,11 +136,25 @@ class LLMClient:
         except Exception as exc:
             self.last_error = str(exc)
             local_response["llm"] = self.status()
+            local_response["llm"]["used"] = False
+            local_response["llm"]["reason"] = "call_failed"
+            local_response["answer_mode"] = "knowledge_fallback"
+            local_response["grounding"] = {
+                "structured_data": True,
+                "knowledge_base": bool(long_term_memory),
+                "llm": False,
+            }
             return local_response
         enhanced = dict(local_response)
-        enhanced["answer"] = answer
+        enhanced["answer"] = self._ensure_required_tables(answer, local_response)
         enhanced["llm"] = self.status()
         enhanced["llm"]["used"] = True
+        enhanced["answer_mode"] = "llm_knowledge_hybrid"
+        enhanced["grounding"] = {
+            "structured_data": True,
+            "knowledge_base": bool(long_term_memory),
+            "llm": True,
+        }
         return enhanced
 
     def chat(
@@ -145,17 +169,21 @@ class LLMClient:
         persona = persona_for(persona_id)
         memory_section = (
             "\n以下是当前用户的相关长期记忆，仅在确实相关时参考：\n"
-            f"{long_term_memory[:3000]}"
+            f"{long_term_memory[:6000]}"
             if long_term_memory else ""
         )
         system_prompt = (
             "你是华侨大学学业规划 AI“勤勉”，也是当前选课规划程序的智能控制助手。"
             "你能理解用户自然语言，并基于工具结果解释专业、课程、学分、老师、抢课、冲突和职业规划。"
-            "你必须基于工具返回的 JSON 回答，"
+            "你必须同时综合结构化工具结果和检索到的知识库上下文回答，而不是照抄固定模板或只复述其中一方。"
+            "结构化工具结果中的专业、学制、课程、学分、学院、教师等事实优先级最高，所有数值必须原样保留。"
             "不要编造未提供的培养方案、教师或教务信息。遇到模板数据要明确说是模板/演示数据。"
+            "当结果包含多门课程、多个学期、多个教师或多个比较项时，必须先给结论，再使用标准 Markdown 表格展示关键字段；"
+            "课程规划表至少包含学期、课程、学分、类别和学习重点，表格后再给出结合用户问题的个性化分析。"
+            "不要使用纯文本竖线以外的伪表格，也不要把全部内容挤成一大段。"
             "如果用户只是寒暄或闲聊，可以自然、亲切地回应，不要硬讲专业信息。"
             "如果工具结果包含 ui_actions，说明页面会自动执行这些动作，你可以简短说明已经帮用户切到相应功能。"
-            "回答要短、清晰、适合学生继续追问。"
+            "回答要清晰、分层、适合学生继续追问；没有证据的部分要明确说明需要以学院最新培养方案复核。"
             f"当前对话人格是“{persona['name']}”：{persona['system_prompt']}"
             f"{memory_section}"
         )
@@ -173,6 +201,11 @@ class LLMClient:
                     "persona": public_persona(persona_id),
                     "selected_major": major,
                     "tool_result": self._compact(local_response),
+                    "output_contract": {
+                        "grounding": "structured_data_plus_knowledge_base",
+                        "markdown_table_for_multi_item_results": True,
+                        "preserve_all_factual_numbers": True,
+                    },
                 },
                 ensure_ascii=False,
             ),
@@ -183,6 +216,54 @@ class LLMClient:
         }
         result = self.request_chat_completion(payload)
         return result["choices"][0]["message"]["content"].strip()
+
+    @staticmethod
+    def _has_markdown_table(text: str) -> bool:
+        lines = str(text or "").splitlines()
+        separator = re.compile(
+            r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$"
+        )
+        return any(separator.match(line) and index > 0 and "|" in lines[index - 1]
+                   for index, line in enumerate(lines))
+
+    @classmethod
+    def _extract_markdown_tables(cls, text: str) -> list[str]:
+        lines = str(text or "").splitlines()
+        separator = re.compile(
+            r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$"
+        )
+        tables: list[str] = []
+        index = 1
+        while index < len(lines):
+            if not separator.match(lines[index]) or "|" not in lines[index - 1]:
+                index += 1
+                continue
+            block = [lines[index - 1], lines[index]]
+            index += 1
+            while index < len(lines) and lines[index].strip() and "|" in lines[index]:
+                block.append(lines[index])
+                index += 1
+            tables.append("\n".join(block))
+        return tables
+
+    @classmethod
+    def _ensure_required_tables(
+        cls,
+        answer: str,
+        local_response: dict[str, Any],
+    ) -> str:
+        """Keep LLM analysis while guaranteeing structured results stay tabular."""
+        local_answer = str(local_response.get("answer", ""))
+        if cls._has_markdown_table(answer) or not cls._has_markdown_table(local_answer):
+            return answer
+        tables = cls._extract_markdown_tables(local_answer)
+        if not tables:
+            return answer
+        return (
+            f"{answer.rstrip()}\n\n"
+            "### 关键数据表（知识库与培养方案核验）\n\n"
+            + "\n\n".join(tables)
+        )
 
     def request_chat_completion(
         self,

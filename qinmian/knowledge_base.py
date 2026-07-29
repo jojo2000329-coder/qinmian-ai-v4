@@ -217,7 +217,8 @@ class KnowledgeBase:
             desired_ids.add(course_id)
             courses = domestic.get("courses", [])
             course_lines = []
-            for semester in range(1, 9):
+            semester_count = store.program_years_for(major) * 2
+            for semester in range(1, semester_count + 1):
                 names = [c.get("name", "") for c in courses if c.get("semester") == semester]
                 if names:
                     course_lines.append(f"第{semester}学期：{'、'.join(names)}")

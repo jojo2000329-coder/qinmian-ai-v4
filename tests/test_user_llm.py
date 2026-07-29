@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from qinmian.api_config import normalize_api_base_url, normalize_provider_config
+from qinmian.llm import LLMClient
 from qinmian.user_llm import UserLLMConfigStore
 
 
@@ -204,3 +205,127 @@ def test_agent_uses_request_scoped_personal_client():
 
     assert result["answer"] == "personal:route this user"
     assert result["llm"]["provider"] == "personal-test"
+
+
+def test_curriculum_is_sent_to_personal_llm_with_knowledge_context():
+    from qinmian.agent import QinmianAgent
+    from qinmian.data_store import QinmianDataStore
+
+    captured = {}
+
+    class PersonalClient:
+        def status(self):
+            return {"enabled": True, "provider": "personal-test", "model": "user-model"}
+
+        def enhance_answer(self, message, response, *args, **kwargs):
+            captured["message"] = message
+            captured["response"] = response
+            captured["kwargs"] = kwargs
+            return {
+                **response,
+                "answer": "这是大模型结合知识库生成的课程分析。",
+                "llm": {"used": True, **self.status()},
+                "answer_mode": "llm_knowledge_hybrid",
+            }
+
+    local_table = (
+        "## 临床医学课程规划\n\n"
+        "| 学期 | 课程 | 学分 | 类别 | 学习重点 |\n"
+        "|---|---|---:|---|---|\n"
+        "| 第1学期 | 系统解剖学 | 6 | 学科基础 | 结构与定位 |"
+    )
+    agent = QinmianAgent(QinmianDataStore())
+    agent._request_context.set({
+        "_llm_client": PersonalClient(),
+        "llm_enabled": True,
+        "long_term_memory": "【知识库】临床医学为五年制，课程需按先修关系安排。",
+    })
+    result = agent._with_llm(
+        "临床医学大一课程规划",
+        {
+            "intent": "curriculum",
+            "answer": local_table,
+            "data": {"major": {"display_name": "临床医学（五年）"}},
+        },
+        None,
+        include_major_context=False,
+    )
+
+    assert result["llm"]["used"] is True
+    assert result["answer_mode"] == "llm_knowledge_hybrid"
+    assert captured["response"]["intent"] == "curriculum"
+    assert "系统解剖学" in captured["response"]["answer"]
+    assert "临床医学为五年制" in captured["kwargs"]["long_term_memory"]
+
+
+def test_llm_prompt_combines_knowledge_and_structured_data_and_guarantees_table(monkeypatch):
+    client = LLMClient({
+        "provider": "openai",
+        "api_key": "unit-test-key",
+        "model": "unit-test-model",
+        "base_url": "https://api.openai.com/v1",
+    })
+    captured = {}
+
+    def fake_completion(payload, **_kwargs):
+        captured["payload"] = payload
+        return {"choices": [{"message": {"content": "大一应先完成医学基础课，再逐步进入临床核心课。"}}]}
+
+    monkeypatch.setattr(client, "request_chat_completion", fake_completion)
+    local_response = {
+        "intent": "curriculum",
+        "answer": (
+            "## 临床医学课程规划\n\n"
+            "| 学期 | 课程 | 学分 | 类别 | 学习重点 |\n"
+            "|---|---|---:|---|---|\n"
+            "| 第1学期 | 系统解剖学 | 6 | 学科基础 | 掌握人体结构 |\n"
+            "| 第2学期 | 组织学与胚胎学 | 4 | 学科基础 | 衔接生理学 |"
+        ),
+        "data": {"major": {"display_name": "临床医学（五年）"}},
+    }
+
+    result = client.enhance_answer(
+        "临床医学大一课程规划",
+        local_response,
+        long_term_memory="知识库证据：临床医学学制五年，共十个学期。",
+    )
+
+    messages = captured["payload"]["messages"]
+    assert "结构化工具结果和检索到的知识库上下文" in messages[0]["content"]
+    assert "知识库证据：临床医学学制五年" in messages[0]["content"]
+    user_payload = json.loads(messages[-1]["content"])
+    assert user_payload["output_contract"]["grounding"] == "structured_data_plus_knowledge_base"
+    assert user_payload["output_contract"]["markdown_table_for_multi_item_results"] is True
+    assert result["answer_mode"] == "llm_knowledge_hybrid"
+    assert result["grounding"] == {
+        "structured_data": True,
+        "knowledge_base": True,
+        "llm": True,
+    }
+    assert "大一应先完成医学基础课" in result["answer"]
+    assert "| 学期 | 课程 | 学分 | 类别 | 学习重点 |" in result["answer"]
+    assert "系统解剖学" in result["answer"]
+
+
+def test_llm_failure_returns_labeled_knowledge_fallback(monkeypatch):
+    client = LLMClient({
+        "provider": "openai",
+        "api_key": "unit-test-key",
+        "model": "unit-test-model",
+        "base_url": "https://api.openai.com/v1",
+    })
+
+    def fail_completion(_payload, **_kwargs):
+        raise RuntimeError("temporary model failure")
+
+    monkeypatch.setattr(client, "request_chat_completion", fail_completion)
+    result = client.enhance_answer(
+        "课程规划",
+        {"intent": "curriculum", "answer": "本地可核验课程表", "data": {}},
+        long_term_memory="知识库课程证据",
+    )
+
+    assert result["answer"] == "本地可核验课程表"
+    assert result["answer_mode"] == "knowledge_fallback"
+    assert result["llm"]["used"] is False
+    assert result["llm"]["reason"] == "call_failed"
