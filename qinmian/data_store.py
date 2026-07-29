@@ -14,6 +14,57 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 
+CAREER_CATEGORY_GROUPS = {
+    "数字技术": {
+        "算法工程师",
+        "软件工程师",
+        "数据分析师",
+        "产品经理",
+        "网络安全工程师",
+    },
+    "电子信息": {
+        "集成电路工程师",
+        "通信工程师",
+        "电气工程师",
+    },
+    "智能制造": {
+        "智能制造工程师",
+        "机械工程师",
+        "材料工程师",
+        "化学工程师",
+    },
+    "经济管理": {
+        "金融分析师",
+        "项目经理",
+        "旅游与酒店管理师",
+    },
+    "建筑规划": {
+        "建筑师",
+        "土木工程师",
+    },
+    "传媒内容": {
+        "新媒体运营",
+        "文化创意策划师",
+    },
+    "法律语言": {
+        "律师",
+        "翻译",
+    },
+    "教育研究": {
+        "教师",
+        "科研人员",
+    },
+    "医疗健康": {
+        "医疗健康专员",
+    },
+    "设计创意": {
+        "设计师",
+    },
+    "土木环境": {
+        "环境工程师",
+    },
+}
+
 
 def load_json(name: str) -> dict[str, Any]:
     path = DATA_DIR / name
@@ -52,6 +103,16 @@ class QinmianDataStore:
         self.reviews_doc = load_json("course_reviews.json")
         self.professors_doc = load_json("professors.json")
         self.career_doc = load_json("career_profiles.json")
+        career_extra = load_json_optional(
+            "career_profiles_extra.json",
+            {"source": {}, "roles": {}},
+        )
+        base_roles = self.career_doc.setdefault("roles", {})
+        for role_name, profile in career_extra.get("roles", {}).items():
+            merged = copy.deepcopy(base_roles.get(role_name, {}))
+            merged.update(profile)
+            base_roles[role_name] = merged
+        self.career_doc["extra_source"] = career_extra.get("source", {})
         self.seat_doc = load_json("seat_inventory.json")
         self.teacher_roster_doc = load_json_optional("teacher_roster.json", {"teachers": []})
         self.faculty_profiles_doc = load_json_optional("faculty_profiles.json", {"source": {}, "colleges": [], "ranks": [], "teachers": []})
@@ -945,6 +1006,37 @@ class QinmianDataStore:
 
     def hot_directions(self) -> list[dict[str, Any]]:
         return self.career_doc["hot_directions"]
+
+    def career_category(
+        self,
+        name: str,
+        profile: dict[str, Any] | None = None,
+    ) -> str:
+        profile = profile or self.career_doc.get("roles", {}).get(name, {})
+        category = str(profile.get("category", "")).strip()
+        if category:
+            return category
+        return next(
+            (
+                group
+                for group, names in CAREER_CATEGORY_GROUPS.items()
+                if name in names
+            ),
+            "其他方向",
+        )
+
+    def career_roles(self) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for name, profile in self.career_doc.get("roles", {}).items():
+            rows.append({
+                "name": name,
+                "aliases": list(profile.get("aliases", [])),
+                "category": self.career_category(name, profile),
+                "description": str(profile.get("description", "")).strip(),
+                "target_majors": list(profile.get("target_majors", [])),
+                "keywords": list(profile.get("keywords", [])),
+            })
+        return sorted(rows, key=lambda row: (row["category"], row["name"]))
 
     def offerings(self) -> list[dict[str, Any]]:
         rows = []

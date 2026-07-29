@@ -508,6 +508,45 @@ def api_hot():
     return jsonify(STORE.hot_directions())
 
 
+@app.route("/api/careers")
+def api_careers():
+    roles = STORE.career_roles()
+    categories: dict[str, int] = {}
+    for role in roles:
+        category = role["category"]
+        categories[category] = categories.get(category, 0) + 1
+    return jsonify({
+        "count": len(roles),
+        "roles": roles,
+        "categories": [
+            {"name": name, "count": count}
+            for name, count in sorted(categories.items())
+        ],
+        "notice": "职业画像用于学业规划参考，不代表就业承诺；资格与招聘要求请以最新规定为准。",
+    })
+
+
+@app.route("/api/careers/recommendations")
+def api_career_recommendations():
+    major_id = request.args.get("major_id", "").strip()
+    if not major_id:
+        return jsonify({
+            "error": "major_id is required",
+            "code": "major_id_required",
+        }), 400
+    try:
+        limit = int(request.args.get("limit", "6"))
+    except ValueError:
+        limit = 6
+    try:
+        return jsonify(CAREER_PLANNER.recommend_for_major(major_id, limit))
+    except KeyError:
+        return jsonify({
+            "error": "未找到该专业",
+            "code": "major_not_found",
+        }), 404
+
+
 # ═════════════════════════════════════════════════════════════════════
 # API: 余位监控
 # ═════════════════════════════════════════════════════════════════════

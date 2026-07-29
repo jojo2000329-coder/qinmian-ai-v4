@@ -545,6 +545,129 @@ class TestPost:
             for course in period["courses"]
         )
 
+    def test_career_library_is_expanded_and_categorized(self, client):
+        resp = client.get("/api/careers")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["count"] >= 50
+        assert len(data["categories"]) >= 10
+        role_names = {role["name"] for role in data["roles"]}
+        assert {
+            "临床医生",
+            "电子商务运营师",
+            "财务管理专员",
+            "人力资源管理师",
+            "行政管理专员",
+            "体育教练",
+        } <= role_names
+
+        covered_majors = {
+            major
+            for role in data["roles"]
+            for major in role["target_majors"]
+        }
+        official_majors = {
+            major["name"]
+            for major in client.get("/api/majors").get_json()
+        }
+        assert official_majors <= covered_majors
+        assert {
+            "财务管理",
+            "电子商务",
+            "人力资源管理",
+            "行政管理",
+            "运动训练",
+        } <= covered_majors
+
+    def test_every_major_has_ranked_career_recommendations(self, client):
+        majors = client.get("/api/majors").get_json()
+        assert len(majors) >= 60
+        for major in majors:
+            resp = client.get(
+                f"/api/careers/recommendations?major_id={major['id']}&limit=5"
+            )
+            assert resp.status_code == 200
+            data = resp.get_json()
+            assert data["major"]["id"] == major["id"]
+            assert 1 <= len(data["recommendations"]) <= 5
+            assert data["recommendations"][0]["match_type"] == "direct"
+            assert data["recommendations"][0]["score"] >= 80
+            assert all(row["reason"] for row in data["recommendations"])
+
+    def test_finance_major_recommends_finance_careers_not_algorithm_by_default(
+        self,
+        client,
+    ):
+        finance = next(
+            major
+            for major in client.get("/api/majors").get_json()
+            if major["name"] == "金融学"
+        )
+        data = client.get(
+            f"/api/careers/recommendations?major_id={finance['id']}&limit=6"
+        ).get_json()
+        names = [row["name"] for row in data["recommendations"]]
+        assert names[0] == "金融分析师"
+        assert "算法工程师" not in names[:3]
+
+    def test_ai_assistant_recommends_multiple_careers_for_selected_major(
+        self,
+        client,
+    ):
+        finance = next(
+            major
+            for major in client.get("/api/majors").get_json()
+            if major["name"] == "金融学"
+        )
+        resp = client.post(
+            "/api/chat",
+            json={
+                "message": "这个专业适合哪些职业？",
+                "context": {"major_id": finance["id"]},
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["intent"] == "career_recommendations"
+        assert data["data"]["major"]["name"] == "金融学"
+        assert len(data["data"]["recommendations"]) >= 3
+        assert "职业画像" in data["answer"]
+        assert "推荐理由" in data["answer"]
+        assert all("金融学" in item for item in data["suggestions"])
+
+    @pytest.mark.parametrize(
+        ("query", "matched_role"),
+        [
+            ("前端开发工程师", "软件工程师"),
+            ("大模型工程师", "算法工程师"),
+            ("电商运营", "电子商务运营师"),
+            ("人力资源专员", "人力资源管理师"),
+            ("运动教练", "体育教练"),
+        ],
+    )
+    def test_career_aliases_match_curated_profiles(
+        self,
+        client,
+        query,
+        matched_role,
+    ):
+        resp = client.post("/api/plan", json={"career": query})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["matched_role"] == matched_role
+        assert data["career_match"]["type"] == "alias"
+        assert data["career_match"]["is_custom"] is False
+        assert data["available_profile_count"] >= 50
+
+    def test_unknown_career_is_not_forced_into_unrelated_profile(self, client):
+        resp = client.post("/api/plan", json={"career": "量子占卜师"})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["matched_role"] == "自定义岗位"
+        assert data["career_match"]["type"] == "custom"
+        assert data["career_match"]["is_custom"] is True
+        assert "暂无可靠匹配" in data["profile_description"]
+
     def test_five_year_career_plan_groups_terms_as_three_plus_final_two(self, client):
         resp = client.post(
             "/api/plan",

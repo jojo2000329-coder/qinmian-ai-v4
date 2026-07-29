@@ -22,6 +22,8 @@ const state = {
   selectedMajor: null,
   curriculum: null,
   hot: null,
+  careerProfiles: null,
+  careerRecommendations: null,
   careerPlan: null,
   teacherRoster: null,
   teacherRosterFilters: { college: "", q: "", scheduled: "" },
@@ -37,7 +39,7 @@ const state = {
     {
       role: "assistant",
       text: "我是勤勉。你可以问我：算法工程师怎么规划完整学习路线？机器学习硬核吗？人工智能毕业学分是多少？",
-      suggestions: ["推荐热门5个专业方向", "算法工程师完整学习路线", "机器学习硬核吗"],
+      suggestions: ["这个专业适合哪些职业", "算法工程师完整学习路线", "机器学习硬核吗"],
     },
   ],
 
@@ -950,6 +952,7 @@ async function selectMajor(id) {
   const params = new URLSearchParams({ student_type: state.studentType });
   state.curriculum = await api(`/api/curriculum/${encodeURIComponent(id)}?${params.toString()}`);
   state.selectedMajor = state.curriculum.major;
+  state.careerRecommendations = null;
   renderMajorHead();
   renderMajorList();
   renderTab();
@@ -1065,10 +1068,102 @@ function courseList(courses) {
 
 // ── 职业规划 ──────────────────────────────────────────────────────
 
-function renderCareer() {
+async function ensureCareerProfiles() {
+  if (!state.careerProfiles) state.careerProfiles = await api("/api/careers");
+}
+
+async function ensureCareerRecommendations() {
+  const majorId = state.selectedMajor?.id;
+  if (!majorId) return;
+  if (state.careerRecommendations?.major?.id === majorId) return;
+  state.careerRecommendations = await api(
+    `/api/careers/recommendations?major_id=${encodeURIComponent(majorId)}&limit=6`
+  );
+}
+
+function renderMajorCareerRecommendations() {
+  const data = state.careerRecommendations;
+  const rows = data?.recommendations || [];
+  if (!rows.length) {
+    return `<div class="empty-state">当前专业暂未匹配到职业画像，请从完整职业库中搜索。</div>`;
+  }
+  return `
+    <div class="major-career-heading">
+      <div>
+        <strong>${escapeHtml(data.major.display_name)}适配职业画像</strong>
+        <span>先选职业，再生成对应的分学期学习路线</span>
+      </div>
+      <span class="major-career-count">推荐 ${rows.length} 个方向</span>
+    </div>
+    <div class="major-career-recommendations">
+      ${rows.map((role, index) => `
+        <button type="button" class="major-career-card ${index === 0 ? "primary-match" : ""}"
+                data-recommended-career="${escapeHtml(role.name)}">
+          <span class="major-career-rank">${index + 1}</span>
+          <span class="major-career-content">
+            <span class="major-career-title">
+              <strong>${escapeHtml(role.name)}</strong>
+              <em>${role.score}% · ${escapeHtml(role.level)}</em>
+            </span>
+            <span class="major-career-meta">${escapeHtml(role.category)} · ${escapeHtml(role.reason)}</span>
+            ${role.description ? `<span class="major-career-description">${escapeHtml(role.description)}</span>` : ""}
+          </span>
+        </button>
+      `).join("")}
+    </div>
+    <p class="career-library-notice">${escapeHtml(data.notice || "")}</p>`;
+}
+
+function renderCareerRoleSuggestions() {
+  const container = $("#careerRoleSuggestions");
+  if (!container || !state.careerProfiles) return;
+  const category = $("#careerCategory")?.value || "";
+  const roles = state.careerProfiles.roles
+    .filter((role) => !category || role.category === category)
+    .slice(0, 12);
+  container.innerHTML = roles.map((role) => `
+    <button type="button" class="career-role-chip" data-career-role="${escapeHtml(role.name)}">
+      <strong>${escapeHtml(role.name)}</strong>
+      <span>${escapeHtml(role.category)}</span>
+    </button>
+  `).join("");
+  container.querySelectorAll("[data-career-role]").forEach((button) => {
+    button.addEventListener("click", () => {
+      $("#careerInput").value = button.dataset.careerRole;
+      generateCareerPlan();
+    });
+  });
+}
+
+async function renderCareer() {
+  await Promise.all([
+    ensureCareerProfiles(),
+    ensureCareerRecommendations(),
+  ]);
+  const library = state.careerProfiles;
+  const recommendedRoles = state.careerRecommendations?.recommendations || [];
+  const defaultCareer = recommendedRoles[0]?.name || "";
+  const categoryOptions = library.categories
+    .map((item) => `<option value="${escapeHtml(item.name)}">${escapeHtml(item.name)}（${item.count}）</option>`)
+    .join("");
+  const roleOptions = library.roles.flatMap((role) => [
+    `<option value="${escapeHtml(role.name)}">${escapeHtml(role.category)}</option>`,
+    ...role.aliases.map((alias) => (
+      `<option value="${escapeHtml(alias)}">${escapeHtml(alias)} → ${escapeHtml(role.name)}</option>`
+    )),
+  ]).join("");
   $("#tabBody").innerHTML = `
-    <section class="panel"><h2>未来职业画像与专业适配课表</h2><div class="actions">
-      <label><span>理想岗位</span><input id="careerInput" value="算法工程师" /></label>
+    <section class="panel"><h2>未来职业画像与专业适配课表</h2>
+      ${renderMajorCareerRecommendations()}
+    </section>
+    <section class="panel"><h2>生成所选职业的专业适配课表</h2>
+      <div class="career-library-summary">
+        已收录 <strong>${library.count}</strong> 个职业画像。上方是根据当前专业自动推荐的方向，也可以在这里搜索其他岗位。
+      </div>
+      <div class="actions">
+      <label><span>职业分类</span><select id="careerCategory"><option value="">全部方向</option>${categoryOptions}</select></label>
+      <label><span>理想岗位</span><input id="careerInput" list="careerRoleOptions" value="${escapeHtml(defaultCareer)}" placeholder="先选上方推荐职业，或搜索其他岗位" /></label>
+      <datalist id="careerRoleOptions">${roleOptions}</datalist>
       <button class="primary" id="careerBtn">生成课表</button>
       <div class="export-control">
         <select id="careerExportFormat" class="export-format">
@@ -1079,15 +1174,34 @@ function renderCareer() {
         </select>
         <button id="careerExportBtn" disabled>⇩ 导出课表</button>
       </div>
-    </div></section>
+      </div>
+      <div class="career-role-suggestions" id="careerRoleSuggestions"></div>
+      <p class="career-library-notice">${escapeHtml(library.notice || "")}</p>
+    </section>
     <section class="panel" id="careerResult"><div class="empty-state">输入岗位后生成路线。</div></section>`;
-  $("#careerBtn").addEventListener("click", generateCareerPlan);
+  $("#careerBtn").addEventListener("click", () => generateCareerPlan());
   $("#careerExportBtn").addEventListener("click", exportCareerPlan);
-  generateCareerPlan();
+  $("#careerCategory").addEventListener("change", renderCareerRoleSuggestions);
+  $("#careerInput").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") generateCareerPlan();
+  });
+  $$("[data-recommended-career]").forEach((button) => {
+    button.addEventListener("click", () => {
+      generateCareerPlan(button.dataset.recommendedCareer);
+    });
+  });
+  renderCareerRoleSuggestions();
+  if (defaultCareer) generateCareerPlan(defaultCareer);
 }
 
-async function generateCareerPlan() {
-  const career = $("#careerInput").value.trim() || "算法工程师";
+async function generateCareerPlan(careerOverride = "") {
+  const input = $("#careerInput");
+  const career = String(careerOverride || input?.value || "").trim();
+  if (!career) {
+    showToast("请先选择或输入一个职业画像。", "error");
+    return;
+  }
+  if (input) input.value = career;
   const data = await api("/api/plan", { method: "POST", body: JSON.stringify({ career, major_id: state.selectedMajor.id }) });
   state.careerPlan = data;
   $("#careerResult").innerHTML = renderTimetableFromPlan(data);
@@ -1098,6 +1212,7 @@ function renderTimetableFromPlan(data) {
   const roleName = escapeHtml(data.matched_role || "目标岗位");
   const majorName = escapeHtml(data.selected_major?.display_name || "");
   const salary = data.salary_range || "";
+  const match = data.career_match || {};
   const planningPeriods = data.planning_periods?.length ? data.planning_periods : (data.semesters || []);
   const academicYears = data.academic_years?.length
     ? data.academic_years.map((year) => ({
@@ -1117,6 +1232,13 @@ function renderTimetableFromPlan(data) {
   html += `<span class="career-overview-item">🏫 ${data.regular_semester_count || data.semester_count || 0} 个正式学期 + ${data.summer_term_count || 0} 个小学期</span>`;
   if (salary) html += `<span class="career-overview-item">💰 薪资参考：<strong>${salary}</strong></span>`;
   html += `</div>`;
+  if (data.profile_description) {
+    html += `<p class="career-profile-description"><strong>${escapeHtml(data.profile_category || "职业方向")}：</strong>${escapeHtml(data.profile_description)}</p>`;
+  }
+  if (match.notice) {
+    const matchTone = match.is_custom ? "custom" : (match.type === "semantic" ? "semantic" : "matched");
+    html += `<div class="career-match-note ${matchTone}">${escapeHtml(match.notice)}${data.available_profile_count ? ` 当前职业库共 ${data.available_profile_count} 个画像。` : ""}</div>`;
+  }
   html += evidenceNotice(data);
   const fit = data.selected_major_fit || {};
   const fitScore = Number(fit.score || 0);
@@ -2701,6 +2823,7 @@ function renderAiMessages() {
         <h1>勤勉 AI 助手</h1>
         <p>华侨大学学业规划 · 辐射级智能分析 · 长期记忆已${state.memoryEnabled ? "开启" : "关闭"}</p>
         <div class="ai-welcome-suggestions">
+          <button class="ai-chip" data-suggest="这个专业适合哪些职业">🧭 当前专业职业推荐</button>
           <button class="ai-chip" data-suggest="算法工程师完整学习路线怎么做">🎯 算法工程师课表</button>
           <button class="ai-chip" data-suggest="数据结构这门课难吗">⚡ 课程难度分析</button>
           <button class="ai-chip" data-suggest="计算机科学与技术学院有哪些老师">👨‍🏫 查老师</button>
@@ -2796,8 +2919,34 @@ async function deleteAiMessage(msgIndex) {
 /**
  * 渲染课表规划的时间线卡片（当 intent 为 career_plan 时）
  */
+function renderAiCareerRecommendations(data) {
+  const rows = data?.recommendations || [];
+  if (!rows.length) return "";
+  return `
+    <div class="ai-career-recommendations">
+      <div class="ai-career-recommendations-title">
+        ${escapeHtml(data.major?.display_name || "当前专业")} · 职业画像推荐
+      </div>
+      ${rows.map((role, index) => `
+        <button type="button" class="ai-career-recommendation"
+                data-suggest="${escapeHtml(data.major?.name || "")}专业的${escapeHtml(role.name)}职业画像与学习路线">
+          <span class="ai-career-rank">${index + 1}</span>
+          <span>
+            <strong>${escapeHtml(role.name)}</strong>
+            <small>${escapeHtml(role.category)} · ${role.score}% ${escapeHtml(role.level)}</small>
+            <em>${escapeHtml(role.reason)}</em>
+          </span>
+        </button>
+      `).join("")}
+      <p>${escapeHtml(data.notice || "")}</p>
+    </div>`;
+}
+
 function renderCareerPlanExtra(response) {
   const data = response.data || {};
+  if (response.intent === "career_recommendations") {
+    return renderAiCareerRecommendations(data);
+  }
   const periods = data.planning_periods?.length ? data.planning_periods : data.semesters;
   if (!periods || !Array.isArray(periods) || periods.length === 0) return "";
 

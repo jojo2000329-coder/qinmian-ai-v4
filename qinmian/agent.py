@@ -247,7 +247,11 @@ class QinmianAgent:
             ))
         if self._mentions_major_choice(msg):
             return self._with_memory(message, self._general_major_choice(message))
-        if self._mentions_major_catalog(msg) and not explicit_major_id:
+        if (
+            self._mentions_major_catalog(msg)
+            and not explicit_major_id
+            and not self._asks_career_recommendations(msg)
+        ):
             majors = self.store.list_majors(q=self._catalog_query(msg))[:16]
             if not majors:
                 majors = self.store.list_majors()[:16]
@@ -327,6 +331,28 @@ class QinmianAgent:
                 "data": data,
                 "suggestions": self._credit_suggestions(data),
                 "ui_actions": ui_actions,
+            }, major_id))
+        if self._asks_career_recommendations(msg):
+            if not major_id:
+                return self._with_memory(message, self._with_llm(message, {
+                    "intent": "career_recommendations",
+                    "answer": "请先选择或告诉我一个专业，我会从职业画像库中推荐多个匹配方向并说明理由。",
+                    "data": {"recommendations": []},
+                    "suggestions": [
+                        "金融学适合哪些职业",
+                        "临床医学可以做什么工作",
+                        "人工智能有哪些职业方向",
+                    ],
+                }, None, include_major_context=False))
+            data = self.career_planner.recommend_for_major(major_id, limit=6)
+            return self._with_memory(message, self._with_llm(message, {
+                "intent": "career_recommendations",
+                "answer": self._career_recommendations_answer(data),
+                "data": data,
+                "suggestions": [
+                    f"{data['major']['name']}专业的{row['name']}职业画像与学习路线"
+                    for row in data["recommendations"][:3]
+                ],
             }, major_id))
         if self._mentions_career_plan(msg) or career_followup:
             career = self._extract_role(msg) or self.memory.last_career
@@ -620,6 +646,36 @@ class QinmianAgent:
                     "生涯规划", "职业路线", "路线",
                 ])
                 or (("课表" in msg) and ("四年" in msg or "4年" in msg or "职业" in msg or "岗位" in msg or any(role in msg for role in role_names))))
+
+    def _asks_career_recommendations(self, msg: str) -> bool:
+        career_words = [
+            "职业",
+            "岗位",
+            "工作",
+            "就业方向",
+            "发展方向",
+            "职业方向",
+            "职业画像",
+        ]
+        request_words = [
+            "适合",
+            "推荐",
+            "有哪些",
+            "有什么",
+            "哪些",
+            "能做",
+            "可以做",
+            "怎么就业",
+            "去向",
+        ]
+        return (
+            any(word in msg for word in career_words)
+            and any(word in msg for word in request_words)
+            and not any(
+                role in msg
+                for role in self.store.career_doc.get("roles", {})
+            )
+        )
 
     def _mentions_curriculum(self, msg: str) -> bool:
         return any(word in msg for word in ["专业", "分流", "必修", "选修", "课程", "培养方案", "大类"])
@@ -1350,6 +1406,31 @@ class QinmianAgent:
         parts.extend([
             "",
             "> 小学期内容是 0 学分职业规划建议，不代表学校正式开课；最终以学院培养方案和教务系统为准。",
+        ])
+        return "\n".join(parts)
+
+    def _career_recommendations_answer(self, data: dict[str, Any]) -> str:
+        major = data.get("major", {})
+        major_name = major.get("display_name") or major.get("name") or "当前专业"
+        rows = data.get("recommendations", [])
+        parts = [
+            f"## {major_name}适配职业画像",
+            "",
+            "我结合职业画像目标专业、学科门类、培养方案课程和岗位能力进行了综合排序：",
+            "",
+            "| 职业画像 | 类别 | 匹配度 | 推荐理由 |",
+            "|---|---|---:|---|",
+        ]
+        for row in rows:
+            parts.append(
+                f"| {row.get('name', '')} | {row.get('category', '')} | "
+                f"{row.get('score', 0)}%（{row.get('level', '')}） | "
+                f"{str(row.get('reason', '')).replace('|', '｜')} |"
+            )
+        parts.extend([
+            "",
+            "> 这些是可选择的职业发展方向，并非要求一个专业只能对应一种职业；"
+            "点击下方岗位可继续生成该职业画像和分学期学习路线。",
         ])
         return "\n".join(parts)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections import defaultdict
 from typing import Any
 
@@ -11,8 +12,182 @@ class CareerPlanner:
     def __init__(self, store: QinmianDataStore) -> None:
         self.store = store
 
+    def recommend_for_major(
+        self,
+        major_id: str,
+        limit: int = 6,
+    ) -> dict[str, Any]:
+        """Rank curated career profiles for one selected major."""
+        major = self.store.get_major(str(major_id or "").strip())
+        if not major:
+            raise KeyError(f"unknown major: {major_id}")
+
+        limit = max(1, min(int(limit or 6), 10))
+        curriculum = self.store.curriculum_for(major["id"])
+        course_names = [
+            str(course.get("name", "")).strip()
+            for course in curriculum.get("courses", [])
+            if course.get("name")
+        ]
+        major_names = {
+            str(major.get("name", "")).strip(),
+            str(major.get("display_name", "")).strip(),
+            *{
+                str(alias).strip()
+                for alias in major.get("aliases", [])
+                if str(alias).strip()
+            },
+        }
+        major_names.discard("")
+        major_text = " ".join([
+            *sorted(major_names),
+            str(major.get("college", "")),
+            str(major.get("discipline", "")),
+            " ".join(major.get("streams", [])),
+            " ".join(course_names),
+        ])
+
+        rows: list[dict[str, Any]] = []
+        for role_name, role in self.store.career_doc.get("roles", {}).items():
+            targets = {
+                str(item).strip()
+                for item in role.get("target_majors", [])
+                if str(item).strip()
+            }
+            direct_target = bool(major_names & targets)
+            partial_target = not direct_target and any(
+                left and right and (left in right or right in left)
+                for left in major_names
+                for right in targets
+            )
+            target_disciplines = {
+                str(candidate.get("discipline", "")).strip()
+                for candidate in self.store.majors
+                if {
+                    str(candidate.get("name", "")).strip(),
+                    str(candidate.get("display_name", "")).strip(),
+                } & targets
+            }
+            same_discipline = bool(
+                major.get("discipline")
+                and major.get("discipline") in target_disciplines
+            )
+
+            role_text = " ".join([
+                role_name,
+                " ".join(role.get("aliases", [])),
+                " ".join(role.get("keywords", [])),
+                " ".join(targets),
+                str(role.get("description", "")),
+                " ".join(role.get("must_courses", [])),
+            ])
+            semantic_score = max(0.0, cosine_similarity(major_text, role_text))
+            name_affinity = max(
+                0.0,
+                cosine_similarity(
+                    " ".join(sorted(major_names)),
+                    " ".join([role_name, *role.get("aliases", [])]),
+                ),
+            )
+            must_courses = [
+                str(item).strip()
+                for item in role.get("must_courses", [])
+                if str(item).strip()
+            ]
+            course_hits = sum(
+                1
+                for required in must_courses
+                if any(
+                    required in course or course in required
+                    for course in course_names
+                    if len(course) >= 2
+                )
+            )
+            course_overlap = min(
+                1.0,
+                course_hits / max(1, min(len(must_courses), 4)),
+            )
+
+            raw_score = (
+                (0.68 if direct_target else 0.44 if partial_target else 0.0)
+                + (0.18 if same_discipline else 0.0)
+                + semantic_score * 0.20
+                + course_overlap * 0.12
+            )
+            if direct_target:
+                raw_score = max(raw_score, 0.82)
+            score = min(99, max(1, round(raw_score * 100)))
+            if direct_target:
+                match_type = "direct"
+                reason = f"职业画像明确将“{major['name']}”列为适配专业"
+            elif partial_target:
+                match_type = "major_related"
+                reason = "职业画像的目标专业与当前专业名称或方向高度相关"
+            elif same_discipline:
+                match_type = "discipline_related"
+                reason = "与当前专业属于相近学科门类，核心能力具有较强迁移性"
+            else:
+                match_type = "skill_related"
+                reason = "当前专业课程与岗位能力存在可迁移的知识或技能"
+
+            level = (
+                "高度适配"
+                if score >= 80
+                else "比较适配"
+                if score >= 60
+                else "相关方向"
+                if score >= 40
+                else "拓展方向"
+            )
+            rows.append({
+                "name": role_name,
+                "aliases": list(role.get("aliases", [])),
+                "category": self.store.career_category(role_name, role),
+                "description": str(role.get("description", "")).strip(),
+                "score": score,
+                "level": level,
+                "match_type": match_type,
+                "reason": reason,
+                "matched_target_majors": sorted(major_names & targets),
+                "target_major_count": len(targets),
+                "name_affinity": round(name_affinity, 4),
+                "must_courses": must_courses,
+                "keywords": list(role.get("keywords", [])),
+            })
+
+        rows.sort(
+            key=lambda row: (
+                row["match_type"] == "direct",
+                row["match_type"] == "major_related",
+                row["score"],
+                row["name_affinity"],
+                -row["target_major_count"],
+                row["name"],
+            ),
+            reverse=True,
+        )
+        relevant_rows = [
+            row
+            for row in rows
+            if row["match_type"] != "skill_related" or row["score"] >= 40
+        ]
+        if not relevant_rows:
+            relevant_rows = rows[:1]
+        selected_rows = relevant_rows[:limit]
+        return {
+            "major": major,
+            "recommendations": selected_rows,
+            "recommendation_count": len(selected_rows),
+            "available_profile_count": len(rows),
+            "notice": (
+                "推荐依据为职业画像目标专业、学科门类、培养方案课程与岗位能力的综合匹配；"
+                "用于探索方向，不代表就业承诺。"
+            ),
+        }
+
     def plan(self, career: str, major_id: str | None = None) -> dict[str, Any]:
-        role_name, role = self._match_role(career)
+        career = str(career or "").strip() or "自定义岗位"
+        role_name, role, match_info = self._match_role(career)
         ranked_majors = self._rank_majors(role, career)
         selected_major = self.store.get_major(major_id) if major_id else None
         if not selected_major:
@@ -45,6 +220,11 @@ class CareerPlanner:
         return {
             "career": career,
             "matched_role": role_name,
+            "career_match": match_info,
+            "profile_category": self.store.career_category(role_name, role),
+            "profile_description": role.get("description", ""),
+            "profile_aliases": role.get("aliases", []),
+            "available_profile_count": len(self.store.career_doc.get("roles", {})),
             "selected_major": selected_major,
             "selected_major_fit": selected_fit,
             "recommended_majors": ranked_majors[:8],
@@ -66,35 +246,128 @@ class CareerPlanner:
             ),
         }
 
-    def _match_role(self, career: str) -> tuple[str, dict[str, Any]]:
+    def _match_role(
+        self,
+        career: str,
+    ) -> tuple[str, dict[str, Any], dict[str, Any]]:
         roles = self.store.career_doc["roles"]
-        if career in roles:
-            return career, roles[career]
+        query = self._normalize_role_text(career)
+        if not query:
+            return self._custom_role(career, 0.0)
+
+        for name, role in roles.items():
+            if query == self._normalize_role_text(name):
+                return (
+                    name,
+                    role,
+                    self._match_info("exact", 1.0, False),
+                )
+            for alias in role.get("aliases", []):
+                if query == self._normalize_role_text(alias):
+                    return (
+                        name,
+                        role,
+                        self._match_info("alias", 1.0, False),
+                    )
+
+        substring_matches: list[tuple[float, int, str, dict[str, Any]]] = []
+        for name, role in roles.items():
+            for candidate in [name, *role.get("aliases", [])]:
+                normalized = self._normalize_role_text(candidate)
+                if len(normalized) < 2:
+                    continue
+                if normalized in query or query in normalized:
+                    coverage = min(len(query), len(normalized)) / max(
+                        len(query),
+                        len(normalized),
+                    )
+                    substring_matches.append(
+                        (0.78 + coverage * 0.2, len(normalized), name, role)
+                    )
+        if substring_matches:
+            score, _, name, role = max(substring_matches)
+            return (
+                name,
+                role,
+                self._match_info("alias", min(0.98, score), False),
+            )
+
         best_name = ""
         best_score = -1.0
         for name, role in roles.items():
-            profile = " ".join([name, " ".join(role.get("keywords", [])), " ".join(role.get("target_majors", []))])
+            profile = " ".join([
+                name,
+                " ".join(role.get("aliases", [])),
+                " ".join(role.get("keywords", [])),
+                " ".join(role.get("target_majors", [])),
+                str(role.get("description", "")),
+            ])
             score = cosine_similarity(career, profile)
             if score > best_score:
                 best_name = name
                 best_score = score
-        if best_score <= 0:
-            return (
-                "自定义岗位",
-                {
-                    "keywords": [career],
-                    "target_majors": [],
-                    "must_courses": [],
-                    "elective_keywords": [],
-                    "milestones": [
-                        "第1年：补齐通识、数学/写作和专业导论。",
-                        "第2年：完成学科基础与核心专业课。",
-                        "第3年：用选修课和项目靠近目标岗位。",
-                        "第4年：用实习、科研或毕业设计形成作品。"
-                    ],
-                },
-            )
-        return best_name, roles[best_name]
+        if best_score < 0.16:
+            return self._custom_role(career, max(0.0, best_score))
+        return (
+            best_name,
+            roles[best_name],
+            self._match_info("semantic", best_score, False),
+        )
+
+    @staticmethod
+    def _normalize_role_text(value: str) -> str:
+        return re.sub(
+            r"[^0-9a-z\u4e00-\u9fff]+",
+            "",
+            str(value or "").lower(),
+        )
+
+    @staticmethod
+    def _match_info(
+        match_type: str,
+        score: float,
+        is_custom: bool,
+    ) -> dict[str, Any]:
+        notices = {
+            "exact": "已使用职业库中的精确岗位画像。",
+            "alias": "已根据常用别名匹配职业画像。",
+            "semantic": "未找到同名岗位，已采用语义最接近的职业画像。",
+            "custom": "职业库中暂无可靠匹配，已生成通用规划框架；建议结合招聘要求继续补充。",
+        }
+        return {
+            "type": match_type,
+            "score": round(float(score), 4),
+            "is_custom": is_custom,
+            "notice": notices[match_type],
+        }
+
+    def _custom_role(
+        self,
+        career: str,
+        score: float,
+    ) -> tuple[str, dict[str, Any], dict[str, Any]]:
+        return (
+            "自定义岗位",
+            {
+                "aliases": [],
+                "category": "自定义方向",
+                "description": (
+                    f"职业库中暂无可靠匹配：“{career}”。以下内容为通用学业规划框架。"
+                ),
+                "keywords": [career],
+                "target_majors": [],
+                "must_courses": [],
+                "elective_keywords": [],
+                "salary_range": "",
+                "milestones": [
+                    "第1年：补齐通识、数学/写作和专业导论。",
+                    "第2年：完成学科基础与核心专业课。",
+                    "第3年：用选修课和项目靠近目标岗位。",
+                    "第4年：用实习、科研或毕业设计形成作品。",
+                ],
+            },
+            self._match_info("custom", score, True),
+        )
 
     def _rank_majors(self, role: dict[str, Any], career: str) -> list[dict[str, Any]]:
         rows = []
