@@ -1864,6 +1864,9 @@ async function handleConflictFileUpload(e) {
     renderConflict();
     await runConflict();
     appendNotification(`已从 ${escapeHtml(file.name)} 导入 ${result.courses.length} 门课程`);
+    if (result.analysis_note) {
+      appendNotification(result.analysis_note);
+    }
   } catch (err) {
     const target = $("#conflictResult");
     if (target) target.innerHTML = `<div style="padding:12px;text-align:center;color:#ef4444;font-size:12px">分析课表失败：${escapeHtml(err.message)}</div>`;

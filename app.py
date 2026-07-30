@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import binascii
 import datetime
+import functools
 import io
 import json
 import mimetypes
@@ -743,7 +744,7 @@ def api_llm_test():
         ).strip()
     except (RuntimeError, OSError, ValueError, KeyError, IndexError, json.JSONDecodeError) as exc:
         return jsonify({
-            "error": str(exc)[:500],
+            "error": _public_llm_connection_error(exc),
             "code": "llm_test_failed",
             "provider": client.provider,
             "model": client.model,
@@ -755,6 +756,20 @@ def api_llm_test():
         "model": client.model,
         "latency_ms": round((time.perf_counter() - started) * 1000),
     })
+
+
+def _public_llm_connection_error(exc: Exception) -> str:
+    """Return a safe, actionable message without echoing credentials/provider JSON."""
+    message = str(exc).lower()
+    if "401" in message or "incorrect api key" in message or "invalid api key" in message:
+        return "API Key 无效或已被撤销，请重新创建密钥并保存配置。"
+    if "429" in message or "insufficient_quota" in message or "quota" in message:
+        return "API 账户额度不足或未开通计费，请充值额度，或切换到其他可用模型。"
+    if "404" in message or "model_not_found" in message:
+        return "模型名称不存在或当前账号无权使用，请核对模型名称。"
+    if "timeout" in message or "timed out" in message:
+        return "连接模型服务超时，请检查网络或稍后重试。"
+    return "模型服务连接失败，请检查 API 地址、模型名称、密钥和账户状态。"
 
 
 @app.route("/api/llm/toggle", methods=["POST"])
@@ -1589,6 +1604,17 @@ def _is_image_content_unsupported(exc: Exception) -> bool:
     return any(marker in message for marker in markers)
 
 
+def _friendly_model_failure(exc: Exception) -> str:
+    message = str(exc).lower()
+    if "401" in message or "incorrect api key" in message or "invalid api key" in message:
+        return "当前大模型 API Key 无效，已改用服务器 OCR 与本地课程规则识别。"
+    if "429" in message or "insufficient_quota" in message or "quota" in message:
+        return "当前大模型额度不足，已改用服务器 OCR 与本地课程规则识别。"
+    if _is_image_content_unsupported(exc):
+        return "当前模型不支持直接识图，已改用服务器 OCR 兼容识别。"
+    return "大模型暂时不可用，已改用服务器 OCR 与本地课程规则识别。"
+
+
 def _extract_image_text(data: bytes, filename: str) -> str:
     """Run local Tesseract OCR and preserve word coordinates for timetable grids."""
     suffix = Path(filename).suffix.lower()
@@ -1650,6 +1676,162 @@ def _extract_image_text(data: bytes, filename: str) -> str:
     return "\n".join(f"[y={top}] {line}" for top, line in layout_lines).strip()
 
 
+def _parse_ocr_layout_courses(ocr_text: str) -> list[dict[str, Any]]:
+    """Best-effort timetable parser used when the configured LLM is unavailable."""
+    positioned_lines: list[dict[str, Any]] = []
+    token_pattern = re.compile(r"\[x=(\d+)\]([^\[]+)")
+    for raw_line in str(ocr_text or "").splitlines():
+        y_match = re.match(r"\[y=(\d+)\]\s*(.*)", raw_line.strip())
+        if not y_match:
+            continue
+        y = int(y_match.group(1))
+        tokens = [
+            (int(match.group(1)), match.group(2).strip())
+            for match in token_pattern.finditer(y_match.group(2))
+            if match.group(2).strip()
+        ]
+        if tokens:
+            positioned_lines.append({"y": y, "tokens": tokens})
+
+    day_aliases = {
+        "周一": "周一", "星期一": "周一", "礼拜一": "周一",
+        "周二": "周二", "星期二": "周二", "礼拜二": "周二",
+        "周三": "周三", "星期三": "周三", "礼拜三": "周三",
+        "周四": "周四", "星期四": "周四", "礼拜四": "周四",
+        "周五": "周五", "星期五": "周五", "礼拜五": "周五",
+        "周六": "周六", "星期六": "周六", "礼拜六": "周六",
+        "周日": "周日", "星期日": "周日", "星期天": "周日", "周天": "周日",
+    }
+    day_columns: list[tuple[int, str]] = []
+    for line in positioned_lines:
+        for x, text in line["tokens"]:
+            compact = re.sub(r"\s+", "", text)
+            for alias, normalized in day_aliases.items():
+                if alias in compact:
+                    day_columns.append((x, normalized))
+                    break
+    # One heading can be recognized twice; retain one x position per weekday.
+    unique_days: dict[str, int] = {}
+    for x, day in day_columns:
+        unique_days.setdefault(day, x)
+    day_columns = sorted((x, day) for day, x in unique_days.items())
+
+    time_pattern = re.compile(r"(?<!\d)([01]?\d|2[0-3])[:：.]([0-5]\d)(?!\d)")
+    time_rows: list[tuple[int, str, str]] = []
+    for line in positioned_lines:
+        joined = " ".join(text for _, text in line["tokens"])
+        times = [
+            f"{int(hour):02d}:{minute}"
+            for hour, minute in time_pattern.findall(joined)
+        ]
+        if not times:
+            continue
+        start = times[0]
+        if len(times) >= 2:
+            end = times[1]
+        else:
+            hour, minute = map(int, start.split(":"))
+            total = hour * 60 + minute + 100
+            end = f"{(total // 60) % 24:02d}:{total % 60:02d}"
+        time_rows.append((line["y"], start, end))
+
+    def normalized(value: str) -> str:
+        return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", value.lower())
+
+    known_courses = _known_ocr_course_names()
+    results: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for line in positioned_lines:
+        token_norms = [normalized(text) for _, text in line["tokens"]]
+        joined_norm = "".join(token_norms)
+        if not joined_norm:
+            continue
+        occupied: list[tuple[int, int]] = []
+        for course_name in known_courses:
+            course_norm = normalized(course_name)
+            character_index = joined_norm.find(course_norm)
+            if character_index < 0:
+                continue
+            span = (character_index, character_index + len(course_norm))
+            if any(span[0] < used[1] and used[0] < span[1] for used in occupied):
+                continue
+            running = 0
+            course_x = line["tokens"][0][0]
+            for (x, _), token_norm in zip(line["tokens"], token_norms):
+                if running + len(token_norm) > character_index:
+                    course_x = x
+                    break
+                running += len(token_norm)
+            day = ""
+            if day_columns:
+                day = min(day_columns, key=lambda item: abs(item[0] - course_x))[1]
+            if not day:
+                raw_text = "".join(text for _, text in line["tokens"])
+                for alias, normalized_day in day_aliases.items():
+                    if alias in raw_text:
+                        day = normalized_day
+                        break
+            start = end = ""
+            if time_rows:
+                _, start, end = min(
+                    time_rows,
+                    key=lambda item: abs(item[0] - line["y"]),
+                )
+            key = (course_name, day, start)
+            if key in seen:
+                continue
+            seen.add(key)
+            occupied.append(span)
+            results.append({
+                "name": course_name,
+                "day": day,
+                "start": start,
+                "end": end,
+                "category": "未分类",
+                "semester": "",
+            })
+    return results
+
+
+def _local_ocr_analysis(ocr_text: str, warning: str) -> dict[str, Any]:
+    courses = _parse_ocr_layout_courses(ocr_text)
+    if courses:
+        summary = (
+            f"大模型当前不可用，服务器已通过 OCR 和本地课程库识别出 "
+            f"{len(courses)} 门课程。请核对星期和时间后再执行冲突检查。"
+        )
+    else:
+        summary = (
+            "服务器已经读取图片文字，但没有可靠匹配到课程。"
+            "请上传更清晰、仅包含课表区域的截图，或手动添加课程。"
+        )
+    return {
+        "intent": "conflict",
+        "courses": courses,
+        "summary": summary,
+        "career": "",
+        "major": "",
+        "analysis_method": "local_ocr_rules",
+        "analysis_note": warning,
+    }
+
+
+@functools.lru_cache(maxsize=1)
+def _known_ocr_course_names() -> tuple[str, ...]:
+    def normalized(value: str) -> str:
+        return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", value.lower())
+
+    return tuple(sorted(
+        {
+            name.strip()
+            for name in STORE.all_course_names()
+            if isinstance(name, str) and len(normalized(name)) >= 2
+        },
+        key=lambda name: len(normalized(name)),
+        reverse=True,
+    ))
+
+
 def _decode_text_file(data: bytes) -> str:
     for encoding in ("utf-8-sig", "gb18030", "utf-16"):
         try:
@@ -1691,6 +1873,7 @@ def _extract_document_text(data: bytes, filename: str) -> str:
 
 def _analyze_image_bytes(data: bytes, filename: str, mime_type: str, prompt: str = "") -> dict[str, Any]:
     llm = _llm_client_for_user()
+    model_error: RuntimeError | None = None
     analysis_prompt = TIMETABLE_PROMPT
     if prompt:
         analysis_prompt += f"\n\n用户补充要求：{prompt}"
@@ -1717,8 +1900,7 @@ def _analyze_image_bytes(data: bytes, filename: str, mime_type: str, prompt: str
             result["analysis_method"] = "vision_model"
             return result
         except RuntimeError as exc:
-            if not _is_image_content_unsupported(exc):
-                raise
+            model_error = exc
 
     ocr_text = _extract_image_text(data, filename)
     if not ocr_text:
@@ -1732,10 +1914,19 @@ def _analyze_image_bytes(data: bytes, filename: str, mime_type: str, prompt: str
         "请结合坐标还原课表的行列关系；不确定的内容不要编造。\n"
         f"文件名：{filename}\nOCR 布局文字：\n{ocr_text[:60000]}"
     )
-    result = _call_file_analysis(text_content, prompt, llm=llm)
-    result["analysis_method"] = "local_ocr_text_model"
-    result["analysis_note"] = "当前模型不支持直接识图，已自动使用服务器 OCR 兼容识别。"
-    return result
+    # If a direct visual request already proved that authentication/quota is
+    # unavailable, do not send the same failing credential a second time.
+    if model_error and not _is_image_content_unsupported(model_error):
+        return _local_ocr_analysis(ocr_text, _friendly_model_failure(model_error))
+    try:
+        result = _call_file_analysis(text_content, prompt, llm=llm)
+        result["analysis_method"] = "local_ocr_text_model"
+        result["analysis_note"] = (
+            "当前模型不支持直接识图，已自动使用服务器 OCR 兼容识别。"
+        )
+        return result
+    except RuntimeError as exc:
+        return _local_ocr_analysis(ocr_text, _friendly_model_failure(exc))
 
 
 @app.route("/api/files/analyze", methods=["POST"])

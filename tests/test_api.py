@@ -980,6 +980,58 @@ class TestPost:
         assert captured["kwargs"]["use_vision_model"] is True
         assert result["analysis_method"] == "vision_model"
 
+    def test_local_ocr_layout_parser_extracts_known_courses(self):
+        import app as app_module
+
+        ocr_text = (
+            "[y=10] [x=120]周一 [x=360]周二\n"
+            "[y=80] [x=10]08:00 [x=60]09:40 "
+            "[x=130]数据结构 [x=370]大学英语\n"
+        )
+        courses = app_module._parse_ocr_layout_courses(ocr_text)
+
+        assert len(courses) == 2
+        by_name = {course["name"]: course for course in courses}
+        assert by_name["数据结构"]["day"] == "周一"
+        assert by_name["大学英语"]["day"] == "周二"
+        assert by_name["数据结构"]["start"] == "08:00"
+        assert by_name["数据结构"]["end"] == "09:40"
+
+    def test_invalid_api_key_falls_back_to_local_ocr_rules(self, monkeypatch):
+        import app as app_module
+
+        invalid_llm = SimpleNamespace(
+            provider="openai",
+            base_url="https://api.openai.com/v1",
+            model="gpt-4.1-mini",
+            vision_model="gpt-4.1-mini",
+            api_key="invalid-key",
+        )
+        monkeypatch.setattr(app_module, "_llm_client_for_user", lambda: invalid_llm)
+        monkeypatch.setattr(
+            app_module,
+            "_extract_image_text",
+            lambda data, filename: (
+                "[y=10] [x=120]周一\n"
+                "[y=80] [x=10]08:00 [x=60]09:40 [x=130]数据结构"
+            ),
+        )
+
+        def reject_model(content, prompt="", **kwargs):
+            raise RuntimeError("LLM HTTP 401: Incorrect API key provided")
+
+        monkeypatch.setattr(app_module, "_call_file_analysis", reject_model)
+        result = app_module._analyze_image_bytes(
+            b"fake-image",
+            "课表.png",
+            "image/png",
+        )
+
+        assert result["analysis_method"] == "local_ocr_rules"
+        assert result["courses"][0]["name"] == "数据结构"
+        assert "API Key 无效" in result["analysis_note"]
+        assert "Incorrect API key" not in result["analysis_note"]
+
     def test_nested_model_json_parser(self):
         from app import _parse_llm_json
 
