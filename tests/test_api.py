@@ -16,6 +16,7 @@ import io
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -856,6 +857,128 @@ class TestPost:
         assert resp.status_code == 200
         data = resp.get_json()
         assert data["courses"][0]["name"] == "数据结构"
+
+    def test_image_analysis_uses_ocr_for_text_only_model(self, monkeypatch):
+        import app as app_module
+
+        text_llm = SimpleNamespace(
+            provider="deepseek",
+            base_url="https://api.deepseek.com/v1",
+            model="deepseek-chat",
+            vision_model="deepseek-chat",
+            api_key="test-key",
+        )
+        captured = {}
+        monkeypatch.setattr(app_module, "_llm_client_for_user", lambda: text_llm)
+        monkeypatch.setattr(
+            app_module,
+            "_extract_image_text",
+            lambda data, filename: "[y=10] [x=20]周一 [x=180]周二\n"
+            "[y=50] [x=20]高等数学 [x=180]大学英语",
+        )
+
+        def fake_analysis(content, prompt="", **kwargs):
+            captured["content"] = content
+            captured["kwargs"] = kwargs
+            return {
+                "intent": "conflict",
+                "courses": [{"name": "高等数学", "day": "周一"}],
+                "summary": "识别成功",
+                "career": "",
+                "major": "",
+            }
+
+        monkeypatch.setattr(app_module, "_call_file_analysis", fake_analysis)
+        result = app_module._analyze_image_bytes(
+            b"fake-image",
+            "课表.png",
+            "image/png",
+            "检查冲突",
+        )
+
+        assert isinstance(captured["content"], str)
+        assert "OCR 布局文字" in captured["content"]
+        assert captured["kwargs"]["llm"] is text_llm
+        assert result["analysis_method"] == "local_ocr_text_model"
+
+    def test_image_analysis_falls_back_when_gateway_rejects_image_url(self, monkeypatch):
+        import app as app_module
+
+        compatible_llm = SimpleNamespace(
+            provider="custom",
+            base_url="https://example.com/v1",
+            model="example-chat",
+            vision_model="example-chat",
+            api_key="test-key",
+        )
+        calls = []
+        monkeypatch.setattr(app_module, "_llm_client_for_user", lambda: compatible_llm)
+        monkeypatch.setattr(
+            app_module,
+            "_extract_image_text",
+            lambda data, filename: "[y=20] [x=30]数据结构",
+        )
+
+        def fake_analysis(content, prompt="", **kwargs):
+            calls.append(content)
+            if isinstance(content, list):
+                raise RuntimeError(
+                    "LLM HTTP 400: unknown variant `image_url`, expected `text`"
+                )
+            return {
+                "intent": "conflict",
+                "courses": [{"name": "数据结构", "day": "周二"}],
+                "summary": "OCR 识别成功",
+                "career": "",
+                "major": "",
+            }
+
+        monkeypatch.setattr(app_module, "_call_file_analysis", fake_analysis)
+        result = app_module._analyze_image_bytes(
+            b"fake-image",
+            "课表.png",
+            "image/png",
+        )
+
+        assert len(calls) == 2
+        assert isinstance(calls[0], list)
+        assert isinstance(calls[1], str)
+        assert result["analysis_method"] == "local_ocr_text_model"
+
+    def test_vision_model_keeps_direct_image_analysis(self, monkeypatch):
+        import app as app_module
+
+        vision_llm = SimpleNamespace(
+            provider="openai",
+            base_url="https://api.openai.com/v1",
+            model="gpt-4.1-mini",
+            vision_model="gpt-4.1-mini",
+            api_key="test-key",
+        )
+        captured = {}
+        monkeypatch.setattr(app_module, "_llm_client_for_user", lambda: vision_llm)
+
+        def fake_analysis(content, prompt="", **kwargs):
+            captured["content"] = content
+            captured["kwargs"] = kwargs
+            return {
+                "intent": "conflict",
+                "courses": [],
+                "summary": "识别成功",
+                "career": "",
+                "major": "",
+            }
+
+        monkeypatch.setattr(app_module, "_call_file_analysis", fake_analysis)
+        result = app_module._analyze_image_bytes(
+            b"fake-image",
+            "课表.png",
+            "image/png",
+        )
+
+        assert captured["content"][1]["type"] == "image_url"
+        assert captured["kwargs"]["use_vision_model"] is True
+        assert result["analysis_method"] == "vision_model"
 
     def test_nested_model_json_parser(self):
         from app import _parse_llm_json

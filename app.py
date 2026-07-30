@@ -19,6 +19,8 @@ import json
 import mimetypes
 import os
 import re
+import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -1521,12 +1523,18 @@ def _normalize_analysis_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _call_file_analysis(content: Any, prompt: str = "") -> dict[str, Any]:
-    llm = _llm_client_for_user()
+def _call_file_analysis(
+    content: Any,
+    prompt: str = "",
+    *,
+    llm: Any | None = None,
+    use_vision_model: bool = False,
+) -> dict[str, Any]:
+    llm = llm or _llm_client_for_user()
     if not llm.api_key:
         raise RuntimeError("未配置大模型 API Key")
     payload = {
-        "model": llm.vision_model or llm.model,
+        "model": (llm.vision_model or llm.model) if use_vision_model else llm.model,
         "messages": [{"role": "user", "content": content}],
         "max_tokens": 3000,
     }
@@ -1539,6 +1547,107 @@ def _call_file_analysis(content: Any, prompt: str = "") -> dict[str, Any]:
         raise RuntimeError(f"模型接口调用失败：{str(exc)[:300]}") from exc
     answer = response_data["choices"][0]["message"]["content"]
     return _normalize_analysis_result(_parse_llm_json(answer))
+
+
+def _llm_likely_supports_images(llm: Any) -> bool:
+    """Best-effort capability check for OpenAI-compatible chat providers."""
+    provider = str(getattr(llm, "provider", "")).strip().lower()
+    base_url = str(getattr(llm, "base_url", "")).strip().lower()
+    model = str(
+        getattr(llm, "vision_model", "") or getattr(llm, "model", "")
+    ).strip().lower()
+    vision_markers = (
+        "vision", "gpt-4o", "gpt-4.1", "gpt-5", "qwen-vl", "qwen2-vl",
+        "qwen2.5-vl", "qvq", "gemini", "claude-3", "claude-sonnet",
+        "pixtral", "llava", "internvl", "glm-4v", "doubao-vision",
+    )
+    if any(marker in model for marker in vision_markers):
+        return True
+    if provider == "deepseek" or "api.deepseek.com" in base_url:
+        return False
+    if provider in {"qwen", "dashscope", "tongyi"}:
+        return False
+    # OpenAI and unknown compatible gateways may support multimodal messages.
+    # If they reject image_url, _analyze_image_bytes falls back to local OCR.
+    return True
+
+
+def _is_image_content_unsupported(exc: Exception) -> bool:
+    message = str(exc).lower()
+    markers = (
+        "unknown variant `image_url`",
+        "unknown variant 'image_url'",
+        'unknown variant "image_url"',
+        "does not support image",
+        "image input is not supported",
+        "image_url is not supported",
+        "expected `text`",
+        "expected 'text'",
+        'expected "text"',
+        "multimodal is not supported",
+    )
+    return any(marker in message for marker in markers)
+
+
+def _extract_image_text(data: bytes, filename: str) -> str:
+    """Run local Tesseract OCR and preserve word coordinates for timetable grids."""
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}:
+        suffix = ".png"
+    try:
+        with tempfile.TemporaryDirectory(prefix="qinmian-ocr-") as temp_dir:
+            image_path = Path(temp_dir) / f"upload{suffix}"
+            image_path.write_bytes(data)
+            completed = subprocess.run(
+                [
+                    "tesseract",
+                    str(image_path),
+                    "stdout",
+                    "-l",
+                    "chi_sim+eng",
+                    "--psm",
+                    "6",
+                    "tsv",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=45,
+            )
+    except FileNotFoundError as exc:
+        raise RuntimeError("服务器 OCR 组件尚未安装") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("图片文字识别超时，请裁剪图片后重试") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or "").strip()
+        raise RuntimeError(f"图片文字识别失败：{detail[:160] or '无法读取图片'}") from exc
+
+    lines: dict[tuple[int, int, int, int], list[tuple[int, int, str]]] = {}
+    for raw_line in completed.stdout.splitlines()[1:]:
+        columns = raw_line.split("\t", 11)
+        if len(columns) != 12:
+            continue
+        text = columns[11].strip()
+        if not text:
+            continue
+        try:
+            key = tuple(int(columns[index]) for index in (1, 2, 3, 4))
+            left = int(columns[6])
+            top = int(columns[7])
+        except ValueError:
+            continue
+        lines.setdefault(key, []).append((top, left, text))
+
+    layout_lines = []
+    for words in lines.values():
+        words.sort(key=lambda item: item[1])
+        top = min(item[0] for item in words)
+        positioned = " ".join(f"[x={left}]{text}" for _, left, text in words)
+        layout_lines.append((top, positioned))
+    layout_lines.sort(key=lambda item: item[0])
+    return "\n".join(f"[y={top}] {line}" for top, line in layout_lines).strip()
 
 
 def _decode_text_file(data: bytes) -> str:
@@ -1581,15 +1690,52 @@ def _extract_document_text(data: bytes, filename: str) -> str:
 
 
 def _analyze_image_bytes(data: bytes, filename: str, mime_type: str, prompt: str = "") -> dict[str, Any]:
-    encoded = base64.b64encode(data).decode("ascii")
+    llm = _llm_client_for_user()
     analysis_prompt = TIMETABLE_PROMPT
     if prompt:
         analysis_prompt += f"\n\n用户补充要求：{prompt}"
-    content = [
-        {"type": "text", "text": analysis_prompt},
-        {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{encoded}", "detail": "high"}},
-    ]
-    return _call_file_analysis(content, prompt)
+
+    if _llm_likely_supports_images(llm):
+        encoded = base64.b64encode(data).decode("ascii")
+        content = [
+            {"type": "text", "text": analysis_prompt},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{mime_type};base64,{encoded}",
+                    "detail": "high",
+                },
+            },
+        ]
+        try:
+            result = _call_file_analysis(
+                content,
+                prompt,
+                llm=llm,
+                use_vision_model=True,
+            )
+            result["analysis_method"] = "vision_model"
+            return result
+        except RuntimeError as exc:
+            if not _is_image_content_unsupported(exc):
+                raise
+
+    ocr_text = _extract_image_text(data, filename)
+    if not ocr_text:
+        raise RuntimeError(
+            "当前模型不支持直接识图，服务器也没有从图片中识别到文字。"
+            "请上传更清晰、方向正确的课表截图，或改用支持视觉输入的模型。"
+        )
+    text_content = (
+        f"{analysis_prompt}\n\n"
+        "下面是服务器从图片中提取的 OCR 文字。x、y 是文字在图片中的位置，"
+        "请结合坐标还原课表的行列关系；不确定的内容不要编造。\n"
+        f"文件名：{filename}\nOCR 布局文字：\n{ocr_text[:60000]}"
+    )
+    result = _call_file_analysis(text_content, prompt, llm=llm)
+    result["analysis_method"] = "local_ocr_text_model"
+    result["analysis_note"] = "当前模型不支持直接识图，已自动使用服务器 OCR 兼容识别。"
+    return result
 
 
 @app.route("/api/files/analyze", methods=["POST"])
